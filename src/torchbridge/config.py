@@ -66,9 +66,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # topo (retrato/mana/minimapa) — acima deste valor a cena tem HUD e é
         # tratada como gameplay MESMO com o jogador parado (movimento ~0).
         "top_blue_menu": 0.5,
-        # Acima deste valor de azul na faixa da base (última linha da grade)
-        # há um painel descendendo até o rodapé — assinatura do menu de pausa.
-        "base_blue_menu": 0.4,
+        # Acima deste valor de células QUENTES (vermelho/bege) na faixa
+        # central (meio da tela, colunas centrais — onde o painel "Options"
+        # fica) há o menu de pausa. O mundo do jogo é frio (azul-ardósia),
+        # então "quente" é assinatura do painel — medido ao vivo: painel
+        # 0.69 x mundo 0.06–0.17.
+        "panel_warm_menu": 0.4,
         # Regiões ignoradas na análise, em frações 0..1 da área do jogo
         # (x0, y0, x1, y1): a cena 3D central anima até em menus (personagem,
         # fogo, lanternas), então não serve de sinal de cena. Valor medido do
@@ -241,13 +244,14 @@ class ConfigManager:
         data["scenes"]["confirm_samples"] = int(
             clamp(float(data["scenes"]["confirm_samples"]), 1, 8)
         )
-        # Frações de cor das features (0..1; o HUD fica acima de 0.5 e o painel
-        # do pause bem acima de 0.4 — limites generosos, só para não aceitar lixo).
+        # Frações de cor das features (0..1; o HUD fica acima de 0.5 e o
+        # painel do pause bem acima de 0.4 — limites generosos, só para não
+        # aceitar lixo).
         data["scenes"]["top_blue_menu"] = clamp(
             float(data["scenes"]["top_blue_menu"]), 0.0, 1.0
         )
-        data["scenes"]["base_blue_menu"] = clamp(
-            float(data["scenes"]["base_blue_menu"]), 0.0, 1.0
+        data["scenes"]["panel_warm_menu"] = clamp(
+            float(data["scenes"]["panel_warm_menu"]), 0.0, 1.0
         )
         # Máscara de análise: cada retângulo vira [x0, y0, x1, y1] normalizado
         # (0..1, x0 < x1, y0 < y1); entradas inválidas/degeneradas são descartadas.

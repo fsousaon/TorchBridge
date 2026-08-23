@@ -475,11 +475,16 @@ if IS_WINDOWS:
 #      conteúdo conforme a razão (medido ao vivo: 2:1 perde ~20% do brilho,
 #      16:1 devolve quase preto) — não o usamos para reduzir.
 # Devolve None em qualquer falha (janela inválida, jogo em exclusivo, etc.).
+# Com full=True devolve também o buffer cru 1:1 (bytes BGRA, stride = largura*4)
+# e a largura/altura reais do cliente — para salvar/inspecionar a captura.
 def capture_client_grid(
     hwnd: int,
     cols: int = 48,
     rows: int = 27,
-) -> tuple[list[list[int]], list[list[tuple[int, int, int]]]] | None:
+    full: bool = False,
+) -> tuple[list[list[int]], list[list[tuple[int, int, int]]]] | tuple[
+    list[list[int]], list[list[tuple[int, int, int]]], bytes, int, int
+] | None:
     # Devolve (grade de luminância, grade de cor (b, g, r)) da mesma captura.
     if not IS_WINDOWS or not (user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd)):
         return None
@@ -565,6 +570,8 @@ def capture_client_grid(
                 color_line.append((b_total // 9, g_total // 9, r_total // 9))
             luma_grid.append(luma_line)
             color_grid.append(color_line)
+        if full:
+            return luma_grid, color_grid, buffer, rect.right, rect.bottom
         return luma_grid, color_grid
     finally:
         if bitmap:

@@ -144,38 +144,54 @@ class GridColorFeaturesTests(unittest.TestCase):
         """Grade sintética preenchida com uma única cor (b, g, r)."""
         return [[color] * cols for _ in range(rows)]
 
-    # Faixa do topo (HUD) azul-dominante → top_blue alto; base igual ao resto.
+    # Faixa do topo (HUD) azul-dominante → top_blue alto; faixa do painel fria.
+    # Cores em (b, g, r) — ordem do DIB da captura (BGR), não RGB.
     def test_blue_top_band_means_hud_present(self):
         grid = self._rgb_grid(color=(10, 10, 10))
         for row in range(5):  # topo (centros < 0.2)
-            grid[row] = [(60, 40, 200)] * 48
-        top, base = grid_color_features(grid)
+            grid[row] = [(200, 40, 60)] * 48
+        top, panel = grid_color_features(grid)
         self.assertGreaterEqual(top, 0.9)
-        self.assertLess(base, 0.4)
+        self.assertLess(panel, 0.4)
 
-    # Faixa da base (painel do pause) azul → base_blue alto.
-    def test_blue_base_band_means_pause_panel(self):
+    # Painel do pause (pergaminho/botões QUENTES) na faixa central → panel alto.
+    def test_warm_panel_band_means_pause(self):
         grid = self._rgb_grid(color=(10, 10, 10))
-        grid[26] = [(60, 40, 200)] * 48
-        top, base = grid_color_features(grid)
+        for row in range(10, 16):  # centros 0.39..0.60
+            for col in range(10, 38):  # colunas centrais (0.20..0.80)
+                grid[row][col] = (60, 130, 200)  # laranja (r dominante)
+        top, panel = grid_color_features(grid)
         self.assertLess(top, 0.5)
-        self.assertGreaterEqual(base, 0.9)
+        self.assertGreaterEqual(panel, 0.9)
 
-    # Título (topo quente, base escura): nenhuma faixa azul relevante.
-    def test_warm_top_and_dark_base_has_no_blue_signal(self):
+    # Mundo frio (azul) na faixa central não acusa painel — o caso medido ao
+    # vivo (rocha azul-ardósia) que a antiga faixa da base errava.
+    def test_cold_world_has_no_panel_signal(self):
         grid = self._rgb_grid(color=(10, 10, 10))
-        for row in range(5):
-            grid[row] = [(200, 130, 60)] * 48  # laranja do logo
-        top, base = grid_color_features(grid)
+        for row in range(10, 16):
+            for col in range(10, 38):
+                grid[row][col] = (200, 140, 60)  # azul (b dominante)
+        top, panel = grid_color_features(grid)
         self.assertLess(top, 0.5)
-        self.assertLess(base, 0.4)
+        self.assertLess(panel, 0.5)
 
-    # Faixa escura demais não opina (0.0): evita razão instável com 1 pixel azul.
+    # Células quentes fora das colunas centrais (bordas = mundo) não contam.
+    def test_warm_cells_at_screen_edges_do_not_vote(self):
+        grid = self._rgb_grid(color=(10, 10, 10))
+        for row in range(10, 16):
+            for col in range(0, 10):  # borda esquerda
+                grid[row][col] = (60, 130, 200)
+            for col in range(38, 48):  # borda direita
+                grid[row][col] = (60, 130, 200)
+        top, panel = grid_color_features(grid)
+        self.assertEqual(panel, 0.0)
+
+    # Faixa escura demais não opina (0.0): evita razão instável com 1 pixel quente.
     def test_dark_band_does_not_vote(self):
         grid = self._rgb_grid(color=(3, 3, 3))
-        grid[26] = [(60, 40, 200)] + [(3, 3, 3)] * 47
-        top, base = grid_color_features(grid)
-        self.assertEqual(base, 0.0)
+        grid[12][10] = (60, 130, 200)
+        top, panel = grid_color_features(grid)
+        self.assertEqual(panel, 0.0)
 
 
 class SceneAnalyzerTests(unittest.TestCase):
@@ -251,28 +267,42 @@ class SceneAnalyzerTests(unittest.TestCase):
     def test_still_player_with_hud_is_gameplay(self):
         analyzer = self._analyzer()
         for _ in range(3):
-            analyzer.feed(0.2, top_blue=0.84, base_blue=0.0)
+            analyzer.feed(0.2, top_blue=0.84, panel_warm=0.0)
         self.assertEqual(analyzer.kind, SceneKind.GAMEPLAY)
 
-    # Pausa: o painel azul na base vota MENU mesmo com o HUD visível no topo.
+    # Pausa: o painel QUENTE no centro vota MENU mesmo com o HUD visível no topo.
     def test_pause_panel_with_hud_is_menu(self):
         analyzer = self._analyzer()
         for _ in range(3):
-            analyzer.feed(0.0, top_blue=0.73, base_blue=1.0)
+            analyzer.feed(0.0, top_blue=0.73, panel_warm=0.9)
         self.assertEqual(analyzer.kind, SceneKind.MENU)
+
+    # Regressão medida ao vivo: mundo com rocha AZUL nas bordas da base (o
+    # Torchlight do usuário é azul-ardósia) não pode forjar MENU — a antiga
+    # feature "base_blue" votava 0.82–1.00 durante o gameplay e bloqueava a
+    # roda com o jogador correndo; o painel quente (0.06–0.17 no mundo) não.
+    def test_blue_corner_world_does_not_vote_menu(self):
+        analyzer = self._analyzer()
+        for _ in range(3):
+            analyzer.feed(8.0, top_blue=0.65, panel_warm=0.1)
+        self.assertEqual(analyzer.kind, SceneKind.GAMEPLAY)
+        analyzer.reset()
+        for _ in range(3):
+            analyzer.feed(0.2, top_blue=0.56, panel_warm=0.15)  # parado, mundo azul
+        self.assertEqual(analyzer.kind, SceneKind.GAMEPLAY)
 
     # Título (topo quente, sem HUD): decide pelo movimento baixo (menu).
     def test_title_screen_without_hud_is_menu(self):
         analyzer = self._analyzer()
         for _ in range(3):
-            analyzer.feed(0.4, top_blue=0.10, base_blue=0.09)
+            analyzer.feed(0.4, top_blue=0.10, panel_warm=0.09)
         self.assertEqual(analyzer.kind, SceneKind.MENU)
 
     # Gameplay andando (movimento alto + HUD): gameplay, como antes.
     def test_walking_player_with_hud_is_gameplay(self):
         analyzer = self._analyzer()
         for _ in range(3):
-            analyzer.feed(8.0, top_blue=0.84, base_blue=0.0)
+            analyzer.feed(8.0, top_blue=0.84, panel_warm=0.0)
         self.assertEqual(analyzer.kind, SceneKind.GAMEPLAY)
 
     # Sem features de cor (None): comportamento antigo só por movimento.
@@ -289,7 +319,7 @@ class SceneAnalyzerTests(unittest.TestCase):
     def test_pause_panel_beats_high_motion(self):
         analyzer = self._analyzer()
         for _ in range(3):
-            analyzer.feed(9.0, top_blue=0.6, base_blue=0.9)
+            analyzer.feed(9.0, top_blue=0.6, panel_warm=0.9)
         self.assertEqual(analyzer.kind, SceneKind.MENU)
 
 

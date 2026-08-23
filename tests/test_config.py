@@ -43,7 +43,7 @@ class ConfigTests(unittest.TestCase):
             manager = ConfigManager(path)
             scenes = manager.get()["scenes"]
             self.assertEqual(scenes["top_blue_menu"], 0.5)
-            self.assertEqual(scenes["base_blue_menu"], 0.4)
+            self.assertEqual(scenes["panel_warm_menu"], 0.4)
 
     # Limiares de cor são frações 0..1; valores absurdos são limitados na recarga.
     def test_color_thresholds_are_clamped_to_unit_interval(self):
@@ -52,12 +52,12 @@ class ConfigTests(unittest.TestCase):
             manager = ConfigManager(path)
             data = json.loads(path.read_text(encoding="utf-8"))
             data["scenes"]["top_blue_menu"] = 7
-            data["scenes"]["base_blue_menu"] = -1
+            data["scenes"]["panel_warm_menu"] = -1
             path.write_text(json.dumps(data), encoding="utf-8")
             self.assertTrue(manager.reload(force=True))
             scenes = manager.get()["scenes"]
             self.assertEqual(scenes["top_blue_menu"], 1.0)
-            self.assertEqual(scenes["base_blue_menu"], 0.0)
+            self.assertEqual(scenes["panel_warm_menu"], 0.0)
 
     # Retângulos fora da ordem/faixa são normalizados; inválidos são descartados.
     def test_ignore_rects_are_normalized_and_invalid_dropped(self):

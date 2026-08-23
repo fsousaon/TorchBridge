@@ -12,8 +12,12 @@
 # segundo sinal, de COR nas faixas fora da máscara:
 #   * topo (0..0.2 da altura): o HUD do Torchlight tem retrato/mana/minimapa
 #     azul-dominantes — presente no gameplay e no pause, ausente no título;
-#   * base (última linha): o painel "Options" do pause desce até a base e
-#     cobre a linha inteira de azul — não existe no gameplay nem no título.
+#   * meio (0.39..0.60 da altura, colunas centrais): o painel "Options" do
+#     pause — pergaminho bege + botões vermelhos, tons QUENTES sobre o mundo
+#     frio (medido ao vivo: painel 0.69 x mundo 0.06–0.17 de células quentes).
+#     A antiga faixa da base media a última linha da grade: o painel não
+#     chega até lá (medido 0.00 no centro) e o azul vinha das rochas do mundo
+#     nos cantos da tela — piscava 0↔1 durante o gameplay e forjava MENU.
 # Regra por amostra: painel presente => menu; senão HUD presente => gameplay
 # (mesmo parado); senão decide por movimento. A histerese (várias amostras
 # seguidas) evita trocas por ruído, e captura falhou ⇒ UNKNOWN ⇒ roda
@@ -98,29 +102,39 @@ def grid_stats(grid: list[list[int]]) -> tuple[float, float]:
 
 
 # Features de cor por faixas fixas (em frações 0..1 da altura): o azul do
-# topo indica HUD presente (retrato/mana/minimapa) e o azul da base indica o
-# painel do pause desceu até o rodapé. Devolve (top_blue, base_blue) como
-# fração de células azul-dominantes entre as saturadas da faixa (0.0 quando
-# a faixa não tem cor utilizável — escura demais para opinar).
+# topo indica HUD presente (retrato/mana/minimapa) e o QUENTE do meio indica
+# o painel do pause (pergaminho bege + botões vermelhos) — o mundo do
+# Torchlight deste usuário é frio (azul-ardósia), então "quente" separa bem.
+# As duas faixas olham só as colunas centrais (0.20..0.80 da largura): as
+# bordas mostram o mundo (a hotbar é centralizada) e não devem opinar.
+# Devolve (top_blue, panel_warm) como fração de células da cor alvo entre as
+# saturadas da faixa (0.0 quando a faixa não tem cor utilizável — escura
+# demais para opinar).
 def grid_color_features(
     grid: list[list[tuple[int, int, int]]],
     top_max: float = 0.2,
-    base_min: float = 0.96,
+    panel_min: float = 0.39,
+    panel_max: float = 0.60,
+    center_min: float = 0.20,
+    center_max: float = 0.80,
 ) -> tuple[float, float]:
-    """Return (top_band_blue, base_band_blue) fractions of blue-dominant cells."""
+    """Return (top_band_blue, panel_band_warm) fractions of target cells."""
     rows = len(grid)
     if not rows:
         return 0.0, 0.0
     cols = len(grid[0]) or 1
 
-    def band_score(is_in_band) -> float:
+    def band_score(is_in_band, is_target) -> float:
         saturated = 0
-        blue = 0
+        hit = 0
         for row_index, row in enumerate(grid):
             center_y = (row_index + 0.5) / rows
             if not is_in_band(center_y):
                 continue
-            for value in row:
+            for col_index, value in enumerate(row):
+                center_x = (col_index + 0.5) / cols
+                if center_x < center_min or center_x > center_max:
+                    continue
                 b, g, r = value
                 level = (b + g + r) // 3
                 if level < 14:
@@ -128,16 +142,24 @@ def grid_color_features(
                 if max(b, g, r) - min(b, g, r) < 22:
                     continue
                 saturated += 1
-                if b >= r and b >= g and r <= b * 0.6:
-                    blue += 1
+                if is_target(b, g, r):
+                    hit += 1
         # Faixa sem cor suficiente não opina (0.0 em vez de razão instável).
         if saturated < max(2, cols // 10):
             return 0.0
-        return blue / saturated
+        return hit / saturated
 
-    top = band_score(lambda y: y < top_max)
-    base = band_score(lambda y: y > base_min)
-    return top, base
+    # Azul-dominante (b >= r e r bem menor que b): HUD/Mundo azul do jogo.
+    top = band_score(
+        lambda y: y < top_max,
+        lambda b, g, r: b >= r and b >= g and r <= b * 0.6,
+    )
+    # Quente (r bem maior que b): pergaminho/vermelho do painel do pause.
+    panel = band_score(
+        lambda y: panel_min <= y <= panel_max,
+        lambda b, g, r: r >= b * 1.25 and r >= g,
+    )
+    return top, panel
 
 
 # Captura toda preta/plana = quase certamente falha de captura (ex.: exclusive
@@ -157,26 +179,27 @@ class SceneAnalyzer:
         motion_menu: float = 0.5,
         confirm_samples: int = 3,
         top_blue_menu: float = 0.5,
-        base_blue_menu: float = 0.4,
+        panel_warm_menu: float = 0.4,
     ) -> None:
         self.motion_gameplay = motion_gameplay
         self.motion_menu = motion_menu
         self.confirm_samples = max(1, confirm_samples)
-        # Fração de azul nas faixas de cor que revelam menu mesmo com o
-        # jogador parado: topo com HUD (gameplay) x base com painel (pause).
+        # Fração de cor nas faixas que revelam menu mesmo com o jogador
+        # parado: topo com HUD (gameplay) x células QUENTES do painel no
+        # meio da tela (pause).
         self.top_blue_menu = top_blue_menu
-        self.base_blue_menu = base_blue_menu
+        self.panel_warm_menu = panel_warm_menu
         self.kind = SceneKind.UNKNOWN
         self._votes = 0
 
     # Alimenta uma amostra (motion pode ser None = sem captura) e devolve a cena atual.
-    # top_blue/base_blue (frações 0..1 das features de cor) são opcionais; com
+    # top_blue/panel_warm (frações 0..1 das features de cor) são opcionais; com
     # None (teste/uso antigo) o voto continua sendo só por movimento.
     def feed(
         self,
         motion: float | None,
         top_blue: float | None = None,
-        base_blue: float | None = None,
+        panel_warm: float | None = None,
     ) -> str:
         """Feed one sample; returns the current scene kind after voting."""
         # Sem dado (jogo ausente, captura falhou): cena indeterminada e votos zerados —
@@ -186,9 +209,10 @@ class SceneAnalyzer:
             self._votes = 0
             return self.kind
 
-        # Voto desta amostra. Ordem importa: o painel do pause (base azul) é o
-        # sinal mais forte — mesmo com HUD no topo e movimento, manda fechar.
-        if base_blue is not None and base_blue >= self.base_blue_menu:
+        # Voto desta amostra. Ordem importa: o painel do pause (quente no
+        # meio da tela) é o sinal mais forte — mesmo com HUD no topo e
+        # movimento, manda fechar.
+        if panel_warm is not None and panel_warm >= self.panel_warm_menu:
             target = SceneKind.MENU
         # HUD presente (topo azul) => gameplay mesmo com o jogador parado
         # (movimento quase zero); é o caso que o movimento sozinho errava.
@@ -304,9 +328,9 @@ class SceneDetector(threading.Thread):
             ),
         )
         self._last_grid = grid
-        # Sinal de cor: HUD no topo (gameplay parado) x painel na base (pause).
-        top_blue, base_blue = grid_color_features(color_grid)
-        self._publish(self._analyzer.feed(motion, top_blue, base_blue))
+        # Sinal de cor: HUD no topo (gameplay parado) x painel QUENTE no meio (pause).
+        top_blue, panel_warm = grid_color_features(color_grid)
+        self._publish(self._analyzer.feed(motion, top_blue, panel_warm))
 
     # Máquina de estados conforme o perfil (método separado para reconfiguração).
     @staticmethod
@@ -316,7 +340,7 @@ class SceneDetector(threading.Thread):
             motion_menu=float(scenes.get("motion_menu", 0.5)),
             confirm_samples=int(scenes.get("confirm_samples", 3)),
             top_blue_menu=float(scenes.get("top_blue_menu", 0.5)),
-            base_blue_menu=float(scenes.get("base_blue_menu", 0.4)),
+            panel_warm_menu=float(scenes.get("panel_warm_menu", 0.4)),
         )
 
     # Loop principal da thread: amostra no intervalo configurado, dorme o restante.
@@ -337,7 +361,7 @@ class SceneDetector(threading.Thread):
                     or self._analyzer.motion_menu != new_analyzer.motion_menu
                     or self._analyzer.confirm_samples != new_analyzer.confirm_samples
                     or self._analyzer.top_blue_menu != new_analyzer.top_blue_menu
-                    or self._analyzer.base_blue_menu != new_analyzer.base_blue_menu
+                    or self._analyzer.panel_warm_menu != new_analyzer.panel_warm_menu
                 ):
                     self._analyzer = new_analyzer
                     self._analyzer.reset()
