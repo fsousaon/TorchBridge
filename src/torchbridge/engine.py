@@ -10,7 +10,7 @@ from typing import Any
 from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
-from .models import ControllerState, Rect, SharedOverlayState, toggle_panel
+from .models import ControllerState, Rect, SharedOverlayState, panels_x_shift, toggle_panel
 from .win32 import (
     InputInjector,
     WindowLocator,
@@ -283,7 +283,11 @@ class BridgeEngine(threading.Thread):
         # Movimento direto: exige analógico esquerdo inclinado, direito parado e roda fechada.
         if self._mode == "direct" and lmag > 0 and rmag == 0 and not radial_active:
             # Âncora do herói em pixels, a partir das frações do perfil.
-            anchor_x = rect.left + rect.width * float(movement["anchor_x"])
+            # Painel lateral aberto sozinho desloca a âncora para o lado oposto (área visível).
+            anchor_shift = panels_x_shift(self._active_panels)
+            anchor_x = rect.left + rect.width * clamp(
+                float(movement["anchor_x"]) + anchor_shift, 0.05, 0.95
+            )
             anchor_y = rect.top + rect.height * float(movement["anchor_y"])
             radius_x = rect.width * float(movement["radius_x_percent"])
             radius_y = rect.height * float(movement["radius_y_percent"])

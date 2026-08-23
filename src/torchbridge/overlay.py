@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from .config import ConfigManager
-from .models import OverlaySnapshot, SharedOverlayState
+from .models import OverlaySnapshot, SharedOverlayState, panels_x_shift
 from .win32 import make_overlay_clickthrough
 
 
@@ -96,7 +96,9 @@ class GameOverlay(QWidget):
         # Só enquanto LB estiver pressionado (radial_active).
         if not snapshot.radial_active:
             return
-        center = QPointF(self.width() / 2, self.height() / 2)
+        # Painel lateral aberto sozinho desloca a roda para o lado oposto (12,5% da largura).
+        shift = panels_x_shift(snapshot.active_panels)
+        center = QPointF(self.width() / 2 + self.width() * shift, self.height() / 2)
         ring_radius = 126 * scale
         node_radius = 27 * scale
 

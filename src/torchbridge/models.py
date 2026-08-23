@@ -80,6 +80,23 @@ def toggle_panel(active_panels: list[str], slot: str) -> list[str]:
     return result
 
 
+# Fração da largura da tela (12,5%) que a roda de atalhos e a âncora de movimento deslocam
+# quando um único painel lateral está aberto, mantendo-as na área visível do lado oposto.
+PANEL_X_SHIFT = 0.125
+
+
+# Deslocamento horizontal (fração da largura; positivo = direita) conforme os painéis
+# laterais abertos: +12,5% com só o lado esquerdo (índice 0) aberto; -12,5% com só o
+# direito (índice 1); 0 quando ambos estão abertos ou ambos fechados.
+def panels_x_shift(active_panels: list[str]) -> float:
+    left, right = (list(active_panels) + ["", ""])[:2]
+    if left and not right:
+        return PANEL_X_SHIFT
+    if right and not left:
+        return -PANEL_X_SHIFT
+    return 0.0
+
+
 @dataclass(frozen=True)
 # Estado visual imutável que o motor publica para o overlay Qt desenhar.
 class OverlaySnapshot:

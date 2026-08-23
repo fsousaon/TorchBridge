@@ -84,7 +84,10 @@ Soltar LB/L1 confirma a seleção. Uma vibração curta indica a troca de posiç
 As opções da roda também abrem os painéis do jogo: **C** e **P** no lado
 esquerdo da tela; **I**, **S**, **Q** e **J** no lado direito. Escolher a mesma
 opção de novo fecha o painel, e um indicador discreto no topo central do overlay
-mostra, em tempo real, quais painéis estão abertos (esquerdo | direito).
+mostra, em tempo real, quais painéis estão abertos (esquerdo | direito). Com um
+único painel aberto, a roda de atalhos e o ponto central do movimento deslocam-se
+12,5% da largura para o lado oposto do painel (ex.: painel esquerdo aberto → roda
+e âncora à direita), mantendo o alvo na área visível.
 
 ## Modos de uso
 
