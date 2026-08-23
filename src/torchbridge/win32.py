@@ -28,6 +28,7 @@ if IS_WINDOWS:
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     winmm = ctypes.WinDLL("winmm", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
     ULONG_PTR = wintypes.WPARAM
 
@@ -399,3 +400,175 @@ def make_overlay_clickthrough(hwnd: int) -> None:
         GWL_EXSTYLE,
         style | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
     )
+
+
+if IS_WINDOWS:
+    # ctypes.wintypes desta build não traz BITMAPINFOHEADER/BITMAPINFO: define aqui
+    # (layout padrão do GDI, 40 bytes de cabeçalho + paleta opcional).
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", wintypes.DWORD),
+            ("biWidth", wintypes.LONG),
+            ("biHeight", wintypes.LONG),
+            ("biPlanes", wintypes.WORD),
+            ("biBitCount", wintypes.WORD),
+            ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD),
+            ("biXPelsPerMeter", wintypes.LONG),
+            ("biYPelsPerMeter", wintypes.LONG),
+            ("biClrUsed", wintypes.DWORD),
+            ("biClrImportant", wintypes.DWORD),
+        ]
+
+    class BITMAPINFO(ctypes.Structure):
+        _fields_ = [
+            ("bmiHeader", BITMAPINFOHEADER),
+            ("bmiColors", wintypes.DWORD * 3),
+        ]
+
+    # Assinaturas do GDI usadas pela captura de tela (tipagem estrita contra erros de 32/64 bits).
+    gdi32.CreateCompatibleDC.argtypes = (wintypes.HDC,)
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.DeleteDC.argtypes = (wintypes.HDC,)
+    gdi32.DeleteDC.restype = wintypes.BOOL
+    gdi32.CreateDIBSection.argtypes = (
+        wintypes.HDC,
+        ctypes.POINTER(BITMAPINFO),
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p),
+        wintypes.HANDLE,
+        wintypes.DWORD,
+    )
+    gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = (wintypes.HDC, wintypes.HGDIOBJ)
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.StretchBlt.argtypes = (
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.DWORD,
+    )
+    gdi32.StretchBlt.restype = wintypes.BOOL
+    gdi32.DeleteObject.argtypes = (wintypes.HGDIOBJ,)
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    user32.GetDC.argtypes = (wintypes.HWND,)
+    user32.GetDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = (wintypes.HWND, wintypes.HDC)
+    user32.ReleaseDC.restype = ctypes.c_int
+
+
+# Captura a área útil da janela em uma grade cols×rows de luminância (0..255).
+# Duas etapas, ambas à prova de fogo:
+#   1. Copia a REGIÃO do jogo do desktop composto em 1:1 para um DIB. A janela
+#      do Torchlight renderiza via D3D9 e o DC dela é preto para o GDI (BitBlt/
+#      PrintWindow devolvem vazio); a imagem real está na composição da tela,
+#      então lemos a tela recortada no retângulo do cliente (ClientToScreen).
+#   2. A redução para a grade é feita em Python, amostrando um bloco 3×3 no
+#      centro de cada célula. O StretchBlt de downscale do GDI degrada o
+#      conteúdo conforme a razão (medido ao vivo: 2:1 perde ~20% do brilho,
+#      16:1 devolve quase preto) — não o usamos para reduzir.
+# Devolve None em qualquer falha (janela inválida, jogo em exclusivo, etc.).
+def capture_client_grid(
+    hwnd: int,
+    cols: int = 48,
+    rows: int = 27,
+) -> tuple[list[list[int]], list[list[tuple[int, int, int]]]] | None:
+    # Devolve (grade de luminância, grade de cor (b, g, r)) da mesma captura.
+    if not IS_WINDOWS or not (user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd)):
+        return None
+    # Área útil em pixels; janela minimizada/inválida não tem o que capturar.
+    rect = wintypes.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)) or rect.right <= 0 or rect.bottom <= 0:
+        return None
+    # Origem da área útil em coordenadas de tela (início do recorte no desktop).
+    origin = wintypes.POINT(0, 0)
+    if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return None
+    source = user32.GetDC(None)
+    if not source:
+        return None
+    memory = None
+    bitmap = None
+    try:
+        memory = gdi32.CreateCompatibleDC(source)
+        if not memory:
+            return None
+        # DIB de 32 bpp top-down (biHeight negativo) em 1:1: o buffer vem pronto
+        # para ler, sem GetDIBits — Largura e altura reais da janela, não da grade.
+        info = BITMAPINFO()
+        info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        info.bmiHeader.biWidth = rect.right
+        info.bmiHeader.biHeight = -rect.bottom  # negativo = linhas de cima para baixo
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        info.bmiHeader.biCompression = 0  # BI_RGB (sem compressão)
+        bits = ctypes.c_void_p()
+        bitmap = gdi32.CreateDIBSection(
+            memory, ctypes.byref(info), 0, ctypes.byref(bits), None, 0
+        )
+        if not bitmap or not bits.value:
+            return None
+        old = gdi32.SelectObject(memory, bitmap)
+        # Único StretchBlt da cadeia: cópia 1:1 do desktop (SRCCOPY), sem redução.
+        if not gdi32.StretchBlt(
+            memory,
+            0,
+            0,
+            rect.right,
+            rect.bottom,
+            source,
+            origin.x,
+            origin.y,
+            rect.right,
+            rect.bottom,
+            0x00CC0020,
+        ):
+            return None
+        gdi32.SelectObject(memory, old)
+        # Grade por amostragem: bloco 3×3 no centro de cada célula. Devolve as
+        # duas visões da mesma captura: luminância (BT.601, para movimento) e cor
+        # média (b, g, r) por célula (para features de HUD/painel). O buffer 1:1
+        # completo já foi lido uma única vez; a amostragem custa ~cols×rows×9 px.
+        stride = rect.right * 4
+        buffer = ctypes.string_at(bits.value, stride * rect.bottom)
+        luma_grid: list[list[int]] = []
+        color_grid: list[list[tuple[int, int, int]]] = []
+        for row in range(rows):
+            center_y = int((row + 0.5) * rect.bottom / rows)
+            luma_line = []
+            color_line = []
+            for col in range(cols):
+                center_x = int((col + 0.5) * rect.right / cols)
+                luma_total = 0
+                b_total = g_total = r_total = 0
+                for dy in (-1, 0, 1):
+                    y = min(max(center_y + dy, 0), rect.bottom - 1)
+                    row_base = y * stride
+                    for dx in (-1, 0, 1):
+                        x = min(max(center_x + dx, 0), rect.right - 1)
+                        index = row_base + x * 4
+                        b = buffer[index]
+                        g = buffer[index + 1]
+                        r = buffer[index + 2]
+                        luma_total += (r * 299 + g * 587 + b * 114) // 1000
+                        b_total += b
+                        g_total += g
+                        r_total += r
+                luma_line.append(luma_total // 9)
+                color_line.append((b_total // 9, g_total // 9, r_total // 9))
+            luma_grid.append(luma_line)
+            color_grid.append(color_line)
+        return luma_grid, color_grid
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if memory:
+            gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None, source)

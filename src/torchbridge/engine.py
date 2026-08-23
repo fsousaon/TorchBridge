@@ -11,6 +11,7 @@ from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
 from .models import ControllerState, Rect, SharedOverlayState
+from .scene import RADIAL_ALLOWED
 from .win32 import (
     InputInjector,
     WindowLocator,
@@ -227,12 +228,21 @@ class BridgeEngine(threading.Thread):
                 self._tap_binding(bindings.get(button))
 
     # Roda de habilidades: LB + analógico direito escolhe o setor; soltar LB dispara o atalho.
+    # Em telas de menu (título, pausa, carregamento, cinemática) a roda fica
+    # bloqueada: nem desenha no overlay, nem dispara atalho — mesmo com LB segurado.
     def _handle_radial(
         self,
         hub: ControllerHub,
         state: ControllerState,
         bindings: dict[str, Any],
+        allowed: bool,
     ) -> None:
+        # Cena não libera a roda: zera a seleção (nada dispara na soltura) e
+        # apaga o desenho do overlay enquanto o estado durar.
+        if not allowed:
+            self._radial_selection = None
+            self.shared.update(radial_active=False, radial_selection=None)
+            return
         active = state.pressed("lb")
         # Sem LB não há seleção; radial_slot devolve 1..8 somente com inclinação mínima.
         selection = radial_slot(state.rx, state.ry) if active else None
@@ -329,9 +339,11 @@ class BridgeEngine(threading.Thread):
         dt: float,
     ) -> None:
         bindings = cfg["bindings"]
+        # Cena identificada pelo detector: a roda só faz sentido no gameplay.
+        scene_allows_radial = self.shared.get().scene_kind in RADIAL_ALLOWED
         self._handle_center_buttons(state, rect, bindings, now)
         self._handle_discrete_bindings(state, bindings)
-        self._handle_radial(hub, state, bindings)
+        self._handle_radial(hub, state, bindings, scene_allows_radial)
 
         center_combo = state.pressed("back") and state.pressed("start")
         # RB segura Shift (atacar sem avançar) e L3 segura Alt (ver itens); nunca durante o combo de calibração.

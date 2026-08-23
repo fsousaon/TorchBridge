@@ -16,12 +16,13 @@ class MathUtilsTests(unittest.TestCase):
         self.assertGreater(magnitude, 0.9)
         self.assertTrue(math.isclose(x, y))
 
-    # Setores: 1 no topo, 3 à direita, 5 embaixo, 7 à esquerda; inclinação fraca = None.
+    # Setores: 1 no topo, 3 à direita, 4 embaixo, 6 à esquerda (roda de 6 setores);
+    # inclinação fraca = None.
     def test_radial_slots_start_at_top_clockwise(self):
         self.assertEqual(radial_slot(0.0, -1.0), 1)
         self.assertEqual(radial_slot(1.0, 0.0), 3)
-        self.assertEqual(radial_slot(0.0, 1.0), 5)
-        self.assertEqual(radial_slot(-1.0, 0.0), 7)
+        self.assertEqual(radial_slot(0.0, 1.0), 4)
+        self.assertEqual(radial_slot(-1.0, 0.0), 6)
         self.assertIsNone(radial_slot(0.1, 0.1))
 
     # Gatilho -1..1 vira 0..1 linear (0.5 no meio).

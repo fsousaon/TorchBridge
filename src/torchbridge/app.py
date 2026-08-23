@@ -49,6 +49,7 @@ def main() -> int:
     from .engine import BridgeEngine
     from .models import SharedOverlayState
     from .overlay import GameOverlay
+    from .scene import SceneDetector
     from .win32 import SingleInstance, enable_dpi_awareness, show_information
 
     # Antes de criar janelas: DPI awareness para as coordenadas casarem com o jogo.
@@ -89,6 +90,9 @@ def main() -> int:
     shared = SharedOverlayState()
     # Motor de entrada (thread de 120 Hz).
     engine = BridgeEngine(config, shared)
+    # Detector de cena (thread de amostragem): identifica telas de menu e
+    # bloqueia a roda radial; usa o mesmo localizador de janela do motor.
+    scene_detector = SceneDetector(config, shared, engine.locator)
     # Overlay Qt; a exibição é controlada pelo próprio _refresh conforme o jogo.
     overlay = GameOverlay(shared, config)
     # Ícone da bandeja: pausa, perfil, recarga e saída.
@@ -151,8 +155,10 @@ def main() -> int:
             return
         cleaned = True
         engine.stop()
+        scene_detector.stop()
         # Espera o loop encerrar (limitado a 3 s para não travar a saída).
         engine.join(timeout=3.0)
+        scene_detector.join(timeout=3.0)
         tray.hide()
         single_instance.close()
 
@@ -165,8 +171,9 @@ def main() -> int:
     keep_signals_alive.timeout.connect(lambda: None)
     keep_signals_alive.start(250)
 
-    # A thread do motor começa aqui; app.exec() roda até 'Sair'.
+    # As threads do motor e do detector começam aqui; app.exec() roda até 'Sair'.
     engine.start()
+    scene_detector.start()
     # Event loop Qt (bandeja + overlay) até o usuário sair.
     result = app.exec()
     cleanup()

@@ -65,6 +65,8 @@ class OverlaySnapshot:
     controller_name: str = ""
     controller_mapping: str = ""
     mode: str = "direct"
+    # Cena atual identificada pelo SceneDetector ('gameplay', 'menu' ou 'unknown').
+    scene_kind: str = "unknown"
     radial_active: bool = False
     radial_selection: int | None = None
     aim_x: int | None = None

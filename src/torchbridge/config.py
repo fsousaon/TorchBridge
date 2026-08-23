@@ -46,6 +46,35 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_aim_marker": True,
         "show_mode_badge": True,
     },
+    # Identificação de cena: amostra a janela do jogo e bloqueia a roda de
+    # habilidades em telas de menu (título, pausa, carregamento, cinemáticas),
+    # onde ela não faz sentido. Valores em luminância média 0..255 por célula.
+    "scenes": {
+        "enabled": True,
+        # Intervalo entre capturas/amostras da janela do jogo, em segundos.
+        "sample_interval_s": 0.25,
+        # Resolução da grade de luminância capturada (colunas × linhas).
+        "grid_cols": 48,
+        "grid_rows": 27,
+        # Acima deste movimento médio a cena é considerada viva (gameplay).
+        "motion_gameplay": 1.0,
+        # Abaixo deste movimento médio a cena é considerada estática (menu).
+        "motion_menu": 0.5,
+        # Amostras consecutivas concordando para trocar de cena (histerese).
+        "confirm_samples": 3,
+        # Sinal de cor (frações 0..1): o HUD do Torchlight é azul-dominante no
+        # topo (retrato/mana/minimapa) — acima deste valor a cena tem HUD e é
+        # tratada como gameplay MESMO com o jogador parado (movimento ~0).
+        "top_blue_menu": 0.5,
+        # Acima deste valor de azul na faixa da base (última linha da grade)
+        # há um painel descendendo até o rodapé — assinatura do menu de pausa.
+        "base_blue_menu": 0.4,
+        # Regiões ignoradas na análise, em frações 0..1 da área do jogo
+        # (x0, y0, x1, y1): a cena 3D central anima até em menus (personagem,
+        # fogo, lanternas), então não serve de sinal de cena. Valor medido do
+        # print de referência do usuário (a área verde de title-screen.png).
+        "ignore_rects": [[0.0104, 0.1667, 0.9901, 0.8713]],
+    },
     # Botões → teclas do Torchlight; radial_slots são os atalhos da roda (1..6).
     "bindings": {
         "a": "1",
@@ -152,6 +181,7 @@ class ConfigManager:
             "movement",
             "cursor",
             "overlay",
+            "scenes",
             "bindings",
             "raw_controller",
         ):
@@ -191,6 +221,50 @@ class ConfigManager:
         )
         # Escala do overlay entre 0.6× e 2.0×.
         data["overlay"]["scale"] = clamp(float(data["overlay"]["scale"]), 0.6, 2.0)
+        # Amostragem da cena: intervalo de 0.1–2 s, grade de 16×9 até 96×54.
+        data["scenes"]["sample_interval_s"] = clamp(
+            float(data["scenes"]["sample_interval_s"]), 0.1, 2.0
+        )
+        data["scenes"]["grid_cols"] = int(clamp(float(data["scenes"]["grid_cols"]), 16, 96))
+        data["scenes"]["grid_rows"] = int(clamp(float(data["scenes"]["grid_rows"]), 9, 54))
+        # Limiares de movimento em luminância média por célula (0..255).
+        data["scenes"]["motion_gameplay"] = clamp(
+            float(data["scenes"]["motion_gameplay"]), 0.1, 20.0
+        )
+        data["scenes"]["motion_menu"] = clamp(
+            float(data["scenes"]["motion_menu"]), 0.05, 10.0
+        )
+        # A zona de histerese depende de menu < gameplay; senão, ajusta para valer.
+        if data["scenes"]["motion_menu"] >= data["scenes"]["motion_gameplay"]:
+            data["scenes"]["motion_menu"] = data["scenes"]["motion_gameplay"] / 2.0
+        # Confirmações consecutivas entre 1 e 8 amostras.
+        data["scenes"]["confirm_samples"] = int(
+            clamp(float(data["scenes"]["confirm_samples"]), 1, 8)
+        )
+        # Frações de cor das features (0..1; o HUD fica acima de 0.5 e o painel
+        # do pause bem acima de 0.4 — limites generosos, só para não aceitar lixo).
+        data["scenes"]["top_blue_menu"] = clamp(
+            float(data["scenes"]["top_blue_menu"]), 0.0, 1.0
+        )
+        data["scenes"]["base_blue_menu"] = clamp(
+            float(data["scenes"]["base_blue_menu"]), 0.0, 1.0
+        )
+        # Máscara de análise: cada retângulo vira [x0, y0, x1, y1] normalizado
+        # (0..1, x0 < x1, y0 < y1); entradas inválidas/degeneradas são descartadas.
+        rects: list[list[float]] = []
+        for rect in data["scenes"].get("ignore_rects", []):
+            if not isinstance(rect, (list, tuple)) or len(rect) != 4:
+                continue
+            try:
+                x0, y0, x1, y1 = (float(value) for value in rect)
+            except (TypeError, ValueError):
+                continue
+            x0, x1 = sorted((min(1.0, max(0.0, x0)), min(1.0, max(0.0, x1))))
+            y0, y1 = sorted((min(1.0, max(0.0, y0)), min(1.0, max(0.0, y1))))
+            if x1 - x0 < 0.01 or y1 - y0 < 0.01:
+                continue  # retângulo degenerado: não mascara nada útil
+            rects.append([x0, y0, x1, y1])
+        data["scenes"]["ignore_rects"] = rects
         # Slots da roda precisam ser uma lista de strings.
         radial_slots = data["bindings"].get("radial_slots")
         if not isinstance(radial_slots, list) or not all(isinstance(item, str) for item in radial_slots):
