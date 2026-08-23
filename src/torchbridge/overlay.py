@@ -158,6 +158,26 @@ class GameOverlay(QWidget):
         painter.setPen(QColor(230, 245, 248, 235))
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, f"MODO {label}")
 
+    # Indicador discreto no topo-central: painéis abertos pela roda (esquerdo | direito).
+    def _draw_active_panels(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
+        # Índice 0 = lado esquerdo (C/P), 1 = direito (I/S/Q/J); tolera listas curtas.
+        left, right = (list(snapshot.active_panels) + ["", ""])[:2]
+        # Ambos os lados vazios: nada a indicar — mantém a tela limpa (só aparece com painel aberto).
+        if not left and not right:
+            return
+        text = f"{left or '·'} | {right or '·'}"
+        painter.setFont(self._font(max(7, round(8 * scale)), True))
+        metrics = painter.fontMetrics()
+        padding = 8 * scale
+        height = 16 * scale
+        width = metrics.horizontalAdvance(text) + padding * 2
+        box = QRectF((self.width() - width) / 2, 4 * scale, width, height)
+        painter.setPen(QPen(QColor(87, 218, 244, 130), 1.0 * scale))
+        painter.setBrush(QColor(3, 10, 16, 165))
+        painter.drawRoundedRect(box, 8 * scale, 8 * scale)
+        painter.setPen(QColor(220, 242, 248, 210))
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+
     # Mensagens temporárias (conectado, calibrado, perfil recarregado...).
     def _draw_toast(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
         import time
@@ -185,6 +205,8 @@ class GameOverlay(QWidget):
         self._draw_aim(painter, snapshot, scale)
         self._draw_radial(painter, snapshot, scale)
         self._draw_mode_badge(painter, snapshot, scale)
+        # Desenhado antes do toast para o aviso temporário cobrir o indicador quando sobreposto.
+        self._draw_active_panels(painter, snapshot, scale)
         self._draw_toast(painter, snapshot, scale)
         painter.end()
 

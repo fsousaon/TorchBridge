@@ -10,7 +10,7 @@ from typing import Any
 from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
-from .models import ControllerState, Rect, SharedOverlayState
+from .models import ControllerState, Rect, SharedOverlayState, toggle_panel
 from .win32 import (
     InputInjector,
     WindowLocator,
@@ -55,6 +55,8 @@ class BridgeEngine(threading.Thread):
         # Estado do combo Back+Start (calibração): visto?, desde quando?, já disparou?
         # Setor da roda selecionado enquanto LB estiver segurado.
         self._radial_selection: int | None = None
+        # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
+        self._active_panels: list[str] = ["", ""]
         self._center_combo_seen = False
         self._center_combo_started: float | None = None
         self._center_combo_triggered = False
@@ -246,7 +248,13 @@ class BridgeEngine(threading.Thread):
             slots = bindings.get("radial_slots", [])
             # Só dispara se o setor tiver slot definido no perfil (1..6).
             if self._radial_selection is not None and self._radial_selection <= len(slots):
-                self._tap_binding(slots[self._radial_selection - 1])
+                slot = slots[self._radial_selection - 1]
+                self._tap_binding(slot)
+                # O atalho também alterna o rastreador de painéis mostrado no overlay.
+                next_panels = toggle_panel(self._active_panels, slot)
+                if next_panels != self._active_panels:
+                    self._active_panels = next_panels
+                    self.shared.update(active_panels=list(next_panels))
             self._radial_selection = None
 
         self.shared.update(

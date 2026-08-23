@@ -54,6 +54,32 @@ class ControllerState:
         return button in self.buttons
 
 
+# Slots da roda que abrem painéis laterais do jogo, por lateral da tela:
+# índice 0 = lado esquerdo (Personagem 'C' e Pet 'P'); índice 1 = lado direito (Inventário 'I',
+# Habilidades 'S', Missões 'Q' e Diário 'J').
+PANEL_SIDE: dict[str, int] = {
+    "C": 0,
+    "P": 0,
+    "I": 1,
+    "S": 1,
+    "Q": 1,
+    "J": 1,
+}
+
+
+# Alterna o painel 'slot' na lateral correspondente e devolve o novo estado de active_panels
+# ([esquerdo, direito], "" = fechado). Selecionar o painel já aberto o fecha; qualquer outro
+# abre ou substitui o painel daquela lateral. Slots sem lateral definida não alteram o estado.
+def toggle_panel(active_panels: list[str], slot: str) -> list[str]:
+    key = slot.strip().upper()
+    side = PANEL_SIDE.get(key)
+    if side is None:
+        return active_panels
+    result = list(active_panels)
+    result[side] = "" if result[side] == key else key
+    return result
+
+
 @dataclass(frozen=True)
 # Estado visual imutável que o motor publica para o overlay Qt desenhar.
 class OverlaySnapshot:
@@ -67,6 +93,8 @@ class OverlaySnapshot:
     mode: str = "direct"
     radial_active: bool = False
     radial_selection: int | None = None
+    # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
+    active_panels: list[str] = field(default_factory=lambda: ["", ""])
     aim_x: int | None = None
     aim_y: int | None = None
     toast_text: str = ""

@@ -18,8 +18,10 @@ e envia somente entradas normais de teclado e mouse pelo `SendInput` do Windows.
 - movimento direto no analógico esquerdo;
 - mira/cursor com aceleração no analógico direito;
 - modo separado para inventário, lojas e menus;
-- roda visual de oito habilidades;
+- roda visual de seis atalhos (uma por posição do perfil);
 - detecção automática das versões Steam e GOG pelo `Torchlight.exe`;
+- rastreador de painéis abertos pela roda (C/P à esquerda, I/S/Q/J à direita), com
+  indicador discreto no topo central do overlay;
 - envio de comandos somente quando o jogo está em primeiro plano;
 - liberação automática de cliques e teclas ao trocar de janela;
 - calibração do ponto central do personagem dentro do jogo;
@@ -69,7 +71,7 @@ Torchlight em modo janela ou janela sem bordas.
 | X / Quadrado | Atalho 3 |
 | Y / Triângulo | Atalho 4 |
 | Direcional cima/direita/baixo/esquerda | Atalhos 5/6/7/8 |
-| Segurar LB / L1 + analógico direito | Roda de habilidades 1–8 |
+| Segurar LB / L1 + analógico direito | Roda de atalhos 1–6 |
 | RB / R1 | Segura Shift, para atacar sem avançar |
 | L3 | Segura Alt, para exibir itens |
 | R3 | Tab, mapa/minimapa |
@@ -78,6 +80,11 @@ Torchlight em modo janela ou janela sem bordas.
 
 Na roda, a posição superior é o atalho 1 e as demais seguem no sentido horário.
 Soltar LB/L1 confirma a seleção. Uma vibração curta indica a troca de posição.
+
+As opções da roda também abrem os painéis do jogo: **C** e **P** no lado
+esquerdo da tela; **I**, **S**, **Q** e **J** no lado direito. Escolher a mesma
+opção de novo fecha o painel, e um indicador discreto no topo central do overlay
+mostra, em tempo real, quais painéis estão abertos (esquerdo | direito).
 
 ## Modos de uso
 
@@ -158,7 +165,7 @@ Os campos mais úteis são:
 - `response_curve`: maior deixa o começo do analógico mais preciso.
 - `radius_x_percent` e `radius_y_percent`: aumente se o personagem andar pouco.
 - `speed_pixels_per_second`: velocidade do cursor analógico.
-- `bindings`: troca as teclas ligadas aos botões e à roda 1–8.
+- `bindings`: troca as teclas ligadas aos botões e à roda 1–6.
 - `overlay.enabled`: use `false` para desligar somente os elementos visuais.
 
 O perfil é verificado a cada segundo. Salve o JSON e aguarde a mensagem de
