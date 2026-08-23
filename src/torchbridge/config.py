@@ -60,7 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "start": "ESC",
         "rb_hold": "SHIFT",
         "l3_hold": "ALT",
-        "radial_slots": ["i", "c", "s", "p", "j", "q"],
+        "radial_slots": ["I", "S", "Q", "J", "P", "C"],
     },
     # Mapa bruto para controles sem SDL (preenchido pelo assistente de calibração, indexado por GUID).
     "raw_controller": {

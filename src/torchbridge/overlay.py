@@ -111,9 +111,12 @@ class GameOverlay(QWidget):
             "MENUS",
         )
 
+        cfg = self.config.get()
+        radial_slots = cfg["bindings"].get("radial_slots", [])
+
         # Nós a partir do topo, no sentido horário — mesmo layout da função radial_slot.
-        for index in range(6):
-            angle = math.radians(-90 + index * 60)
+        for index in range(min(6, len(radial_slots))):
+            angle = math.radians(-90 + index * (360/len(radial_slots)))
             point = QPointF(
                 center.x() + math.cos(angle) * ring_radius,
                 center.y() + math.sin(angle) * ring_radius,
@@ -134,7 +137,7 @@ class GameOverlay(QWidget):
             painter.drawText(
                 QRectF(point.x() - radius, point.y() - radius, radius * 2, radius * 2),
                 Qt.AlignmentFlag.AlignCenter,
-                str(index + 1),
+                str(radial_slots[index]),
             )
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
