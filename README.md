@@ -210,6 +210,7 @@ habilidades e navegação sem abandonar o controle.
 - Microsoft `SendInput`: <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput>
 - pygame-ce Controller/SDL: <https://pyga.me/docs/ref/sdl2_controller.html>
 - pygame-ce Joystick: <https://pyga.me/docs/ref/joystick.html>
+- Guia interno: [docs/PYGAME.md](docs/PYGAME.md) — como o TorchBridge usa pygame/SDL2.
 - Torchlight no Steam: <https://store.steampowered.com/app/41500/Torchlight/>
 
 Torchlight é marca de seus respectivos proprietários. Este projeto é uma

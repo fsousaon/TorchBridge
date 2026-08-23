@@ -1,3 +1,6 @@
+# Overlay Qt (PySide6): desenha mira, roda de habilidades, badge de modo e toasts.
+# É uma janela sem título, sempre no topo, sem foco e transparente a cliques —
+# o conteúdo vem do SharedOverlayState, preenchido pela thread do motor.
 from __future__ import annotations
 
 import math
@@ -11,56 +14,71 @@ from .models import OverlaySnapshot, SharedOverlayState
 from .win32 import make_overlay_clickthrough
 
 
+# Janela de sobreposição alinhada à área do jogo, redesenhada a ~60 FPS.
 class GameOverlay(QWidget):
     def __init__(self, shared: SharedOverlayState, config: ConfigManager) -> None:
         super().__init__()
         self.shared = shared
         self.config = config
+        # Controle do showEvent: aplica os estilos Win32 só na primeira exibição.
         self._native_styled = False
         self._last_rect = None
         self.setWindowTitle("TorchBridge Overlay")
+        # FramelessWindowHint: sem borda/título; StaysOnTop: acima do jogo; Tool: some da barra de tarefas.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            # Transparente a cliques e sem foco (nunca rouba o input do jogo).
             | Qt.WindowType.WindowTransparentForInput
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        # Fundo transparente, sem receber eventos de mouse e sem ativar ao aparecer.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
+        # Redesenho a cada 16 ms (~60 FPS); o motor publica o estado a 120 Hz.
         self._timer.start(16)
 
+    # Na primeira exibição, aplica o click-through do Win32 usando o handle nativo (winId).
     def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().showEvent(event)
         if not self._native_styled:
             make_overlay_clickthrough(int(self.winId()))
             self._native_styled = True
 
+    # Acompanha o retângulo do jogo e mostra/esconde conforme o estado.
     def _refresh(self) -> None:
         snapshot = self.shared.get()
         rect = snapshot.game_rect
+        # Só desenha com overlay habilitado, jogo presente e janela válida.
         should_show = snapshot.enabled and snapshot.game_found and rect.valid
         if should_show:
             geometry = (rect.left, rect.top, rect.width, rect.height)
+            # O jogo moveu/redimensionou: reposiciona a janela do overlay por cima.
             if geometry != self._last_rect:
                 self.setGeometry(*geometry)
                 self._last_rect = geometry
+            # Mostra uma única vez (evita chamadas repetidas).
             if not self.isVisible():
                 self.show()
             self.update()
+        # Sem razão de aparecer: esconde para não sobrar janela órfã na tela.
         elif self.isVisible():
             self.hide()
 
     @staticmethod
+    # Fonte padrão do overlay, com tamanho e peso.
     def _font(size: int, bold: bool = False) -> QFont:
         font = QFont("Segoe UI", size)
         font.setBold(bold)
         return font
 
+    # Mira: círculo com 'cruz' ao redor do ponto que o motor está apontando.
     def _draw_aim(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
+        # Sem alvo ou com a roda aberta: não desenha a mira.
         if snapshot.aim_x is None or snapshot.aim_y is None or snapshot.radial_active:
             return
         center = QPointF(snapshot.aim_x, snapshot.aim_y)
@@ -73,7 +91,9 @@ class GameOverlay(QWidget):
         painter.drawLine(QPointF(center.x(), center.y() - radius - 5), QPointF(center.x(), center.y() - radius + 1))
         painter.drawLine(QPointF(center.x(), center.y() + radius - 1), QPointF(center.x(), center.y() + radius + 5))
 
+    # Roda central: disco 'MENUS' + 6 nós (um por slot do perfil).
     def _draw_radial(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
+        # Só enquanto LB estiver pressionado (radial_active).
         if not snapshot.radial_active:
             return
         center = QPointF(self.width() / 2, self.height() / 2)
@@ -91,12 +111,14 @@ class GameOverlay(QWidget):
             "MENUS",
         )
 
+        # Nós a partir do topo, no sentido horário — mesmo layout da função radial_slot.
         for index in range(6):
             angle = math.radians(-90 + index * 60)
             point = QPointF(
                 center.x() + math.cos(angle) * ring_radius,
                 center.y() + math.sin(angle) * ring_radius,
             )
+            # Nó selecionado cresce e muda de cor.
             selected = snapshot.radial_selection == index + 1
             radius = node_radius * (1.14 if selected else 1.0)
             painter.setPen(
@@ -115,8 +137,10 @@ class GameOverlay(QWidget):
                 str(index + 1),
             )
 
+    # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
         cfg = self.config.get()
+        # Pode ser desligado pelo perfil.
         if not cfg["overlay"].get("show_mode_badge", True):
             return
         label = "DIRETO" if snapshot.mode == "direct" else "CURSOR"
@@ -131,9 +155,11 @@ class GameOverlay(QWidget):
         painter.setPen(QColor(230, 245, 248, 235))
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, f"MODO {label}")
 
+    # Mensagens temporárias (conectado, calibrado, perfil recarregado...).
     def _draw_toast(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
         import time
 
+        # Texto vazio ou expirado: nada a desenhar.
         if not snapshot.toast_text or snapshot.toast_until <= time.monotonic():
             return
         width = min(self.width() - 40 * scale, max(260 * scale, len(snapshot.toast_text) * 8.4 * scale))
@@ -146,6 +172,7 @@ class GameOverlay(QWidget):
         painter.setPen(QColor(235, 248, 251))
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, snapshot.toast_text)
 
+    # Redesenho completo: lê o snapshot e pinta os quatro elementos na escala do perfil.
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         del event
         snapshot = self.shared.get()
