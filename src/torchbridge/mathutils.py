@@ -35,7 +35,7 @@ def radial_deadzone(
     return x * factor, y * factor, scaled
 
 
-# Converte a direção do analógico direito em setor 1..6 da roda: setor 1 no topo, sentido horário.
+# Converte a direção do analógico direito em setor 1..N da roda: setor 1 no topo, sentido horário.
 def radial_slot(x: float, y: float, slots: int = 6, threshold: float = 0.42) -> int | None:
     """Return a 1-based radial slot, starting at the top and going clockwise."""
     # Sem inclinação mínima (ex.: LB solto, x=y=0): nenhum setor selecionado.

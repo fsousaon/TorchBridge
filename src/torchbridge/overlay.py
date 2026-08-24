@@ -91,7 +91,7 @@ class GameOverlay(QWidget):
         painter.drawLine(QPointF(center.x(), center.y() - radius - 5), QPointF(center.x(), center.y() - radius + 1))
         painter.drawLine(QPointF(center.x(), center.y() + radius - 1), QPointF(center.x(), center.y() + radius + 5))
 
-    # Roda central: disco 'MENUS' + 6 nós (um por slot do perfil).
+    # Roda central: disco 'MENUS' + um nó por slot do perfil.
     def _draw_radial(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
         # Só enquanto LB estiver pressionado (radial_active).
         if not snapshot.radial_active:
@@ -117,7 +117,7 @@ class GameOverlay(QWidget):
         radial_slots = cfg["bindings"].get("radial_slots", [])
 
         # Nós a partir do topo, no sentido horário — mesmo layout da função radial_slot.
-        for index in range(min(6, len(radial_slots))):
+        for index in range(len(radial_slots)):
             angle = math.radians(-90 + index * (360/len(radial_slots)))
             point = QPointF(
                 center.x() + math.cos(angle) * ring_radius,

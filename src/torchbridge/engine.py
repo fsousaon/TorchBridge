@@ -236,8 +236,9 @@ class BridgeEngine(threading.Thread):
         bindings: dict[str, Any],
     ) -> None:
         active = state.pressed("lb")
-        # Sem LB não há seleção; radial_slot devolve 1..8 somente com inclinação mínima.
-        selection = radial_slot(state.rx, state.ry) if active else None
+        slots = bindings.get("radial_slots", [])
+        # Sem LB não há seleção; radial_slot devolve 1..N (N = slots do perfil) com inclinação mínima.
+        selection = radial_slot(state.rx, state.ry, len(slots)) if active else None
         # Setor mudou: atualiza a seleção e vibra para dar retorno tátil.
         if active and selection is not None and selection != self._radial_selection:
             self._radial_selection = selection
@@ -245,8 +246,7 @@ class BridgeEngine(threading.Thread):
 
         # LB liberado: confirma a escolha — dispara o slot selecionado, se mapeado.
         if self._previous.pressed("lb") and not active:
-            slots = bindings.get("radial_slots", [])
-            # Só dispara se o setor tiver slot definido no perfil (1..6).
+            # Só dispara se o setor tiver slot definido no perfil (1..N).
             if self._radial_selection is not None and self._radial_selection <= len(slots):
                 slot = slots[self._radial_selection - 1]
                 self._tap_binding(slot)
