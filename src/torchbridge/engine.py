@@ -61,6 +61,15 @@ class BridgeEngine(threading.Thread):
         self._center_combo_started: float | None = None
         self._center_combo_triggered = False
 
+    # Nova sessão do jogo (borda de subida): reseta o estado da roda. Um encerramento
+    # forçado (Alt+F4) não limpa o estado, e sem esse reset o primeiro toque na roda
+    # depois de reabrir o jogo fariam um toggle no estado fantasma (painel 'fechando'
+    # em vez de 'abrindo') — o deslocamento do overlay não apareceria.
+    def _reset_radial_session(self) -> None:
+        self._active_panels = ["", ""]
+        self._radial_selection = None
+        self.shared.update(active_panels=list(self._active_panels), radial_selection=None)
+
     # Pede a parada; a thread encerra no próximo ciclo.
     def stop(self) -> None:
         self._stop_event.set()
@@ -408,6 +417,8 @@ class BridgeEngine(threading.Thread):
                 # Jogo acabou de aparecer: aviso único (sem spam a cada tick).
                 if game_found and not self._game_was_found:
                     self.shared.toast("Torchlight detectado", 2.5)
+                    # Sessão nova: reseta painéis/seleção da roda (Alt+F4 não limpou o estado).
+                    self._reset_radial_session()
                 # Guarda o estado de detecção para as bordas (subida/descida).
                 self._game_was_found = game_found
 
