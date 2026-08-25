@@ -27,13 +27,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "response_curve": 1.6,
         "trigger_threshold": 0.32,
     },
-    # Movimento direto: âncora = centro do personagem em fração da janela; raios = alcance do cursor.
+    # Movimento direto: âncora = centro do personagem em fração da janela; raio = alcance do cursor.
+    # O raio é sempre uma fração da ALTURA da janela (mesmo valor nos eixos x e y → área circular).
     "movement": {
         "initial_mode": "direct",
         "anchor_x": 0.50,
         "anchor_y": 0.47,
-        "radius_x_percent": 0.16,
-        "radius_y_percent": 0.13,
+        "movement_radius_percent": 0.16,
     },
     # Velocidade máxima do cursor analógico, em pixels por segundo.
     "cursor": {
@@ -177,12 +177,19 @@ class ConfigManager:
         # Âncora do personagem limitada a 5%–95% da janela (nunca fora da tela).
         data["movement"]["anchor_x"] = clamp(float(data["movement"]["anchor_x"]), 0.05, 0.95)
         data["movement"]["anchor_y"] = clamp(float(data["movement"]["anchor_y"]), 0.05, 0.95)
-        data["movement"]["radius_x_percent"] = clamp(
-            # Raios do movimento limitados a 3%–45% da janela.
-            float(data["movement"]["radius_x_percent"]), 0.03, 0.45
-        )
-        data["movement"]["radius_y_percent"] = clamp(
-            float(data["movement"]["radius_y_percent"]), 0.03, 0.45
+        # Perfil antigo (radius_x_percent / radius_y_percent): migra para o raio circular.
+        # O _deep_merge já injetou movement_radius_percent do default, então a detecção
+        # é feita pela presença das chaves legado no dado mesclado.
+        legacy_x = data["movement"].get("radius_x_percent")
+        legacy_y = data["movement"].get("radius_y_percent")
+        if isinstance(legacy_x, (int, float)) or isinstance(legacy_y, (int, float)):
+            values = [float(v) for v in (legacy_x, legacy_y) if isinstance(v, (int, float))]
+            data["movement"]["movement_radius_percent"] = sum(values) / len(values)
+        data["movement"].pop("radius_x_percent", None)
+        data["movement"].pop("radius_y_percent", None)
+        data["movement"]["movement_radius_percent"] = clamp(
+            # Raio do movimento limitado a 3%–45% da altura da janela.
+            float(data["movement"]["movement_radius_percent"]), 0.03, 0.45
         )
         # Modo inicial só aceita valores conhecidos.
         if data["movement"].get("initial_mode") not in {"direct", "cursor"}:

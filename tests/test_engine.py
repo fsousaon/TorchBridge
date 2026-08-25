@@ -84,6 +84,47 @@ class RadialSessionResetTests(unittest.TestCase):
             self.assertEqual(shared.get().active_panels, ["", ""])
 
 
+class DirectMovementCircleTests(unittest.TestCase):
+    # Raio do movimento direto referenciado à ALTURA nos dois eixos: em 1920x1080 com
+    # raio 16%, o alcance máximo é 173 px da âncora (960, 507.6) em qualquer direção — círculo,
+    # não elipse. Sem painel aberto o modo direto fica ativo.
+    def test_max_reach_is_circular_based_on_height(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            radius = 1080 * float(cfg["movement"]["movement_radius_percent"])
+            anchor_x = 1920 * float(cfg["movement"]["anchor_x"])
+            anchor_y = 1080 * float(cfg["movement"]["anchor_y"])
+
+            def reach(direction: tuple[float, float]) -> tuple[int, int]:
+                state = ControllerState(connected=True, lx=direction[0], ly=direction[1])
+                engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+                return injector.moved[-1]
+
+            # Direita, esquerda, baixo e cima com stick cheio: a distância da âncora é a mesma.
+            # Tolerância de 1 px: âncora y (507.6) e raio decimal não caem em inteiro.
+            for dx, dy in ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)):
+                x, y = reach((dx, dy))
+                dist = ((x - anchor_x) ** 2 + (y - anchor_y) ** 2) ** 0.5
+                self.assertLessEqual(
+                    abs(dist - radius), 1.0,
+                    msg=f"Alcance na direção {(dx, dy)} = {dist:.1f} não bate com o raio circular {radius:.1f}",
+                )
+            # Diagonal (0.7071/0.7071 = unidade): mesmo raio, sem ovalizar.
+            x, y = reach((0.7071, 0.7071))
+            dist = ((x - anchor_x) ** 2 + (y - anchor_y) ** 2) ** 0.5
+            self.assertLessEqual(
+                abs(dist - radius), 1.0,
+                msg=f"Alcance diagonal = {dist:.1f} não bate com o raio circular {radius:.1f}",
+            )
+
+
 class LeftStickFreeCursorTests(unittest.TestCase):
     # Com os dois painéis abertos, o analógico esquerdo move o cursor livremente
     # (deslocamento relativo) e NÃO segura o clique do click-to-move.

@@ -28,6 +28,29 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(manager.reload(force=True))
             self.assertEqual(manager.get()["input"]["poll_hz"], 120)
 
+    # Perfil antigo com radius_x_percent/radius_y_percent migra para o raio circular:
+    # a média dos dois valores vira movement_radius_percent e as chaves legado somem.
+    def test_legacy_radii_migrate_to_circular_radius(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "perfil.json"
+            path.write_text(
+                '{"movement": {"radius_x_percent": 0.16, "radius_y_percent": 0.13}}',
+                encoding="utf-8",
+            )
+            manager = ConfigManager(path)
+            movement = manager.get()["movement"]
+            self.assertAlmostEqual(movement["movement_radius_percent"], 0.145)
+            self.assertNotIn("radius_x_percent", movement)
+            self.assertNotIn("radius_y_percent", movement)
+
+    # Perfil novo (movement_radius_percent explícito) não é sobrescrito pela migração legado.
+    def test_new_profile_keeps_its_radius(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "perfil.json"
+            path.write_text('{"movement": {"movement_radius_percent": 0.30}}', encoding="utf-8")
+            manager = ConfigManager(path)
+            self.assertEqual(manager.get()["movement"]["movement_radius_percent"], 0.30)
+
 
 if __name__ == "__main__":
     unittest.main()

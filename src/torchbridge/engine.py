@@ -322,11 +322,12 @@ class BridgeEngine(threading.Thread):
                 float(movement["anchor_x"]) + anchor_shift, 0.05, 0.95
             )
             anchor_y = rect.top + rect.height * float(movement["anchor_y"])
-            radius_x = rect.width * float(movement["radius_x_percent"])
-            radius_y = rect.height * float(movement["radius_y_percent"])
+            # Raio circular: fração da ALTURA da janela nos dois eixos (área de movimento = círculo
+            # ideal, sem ovalizar nas laterais como quando o eixo x usava a largura).
+            radius = rect.height * float(movement["movement_radius_percent"])
             # Cursor na direção (x,y)/|v| × raio; o fator 0.55+0.45·mag amplia o alcance com a inclinação.
-            target_x = round(anchor_x + (lx / max(lmag, 1e-6)) * radius_x * (0.55 + 0.45 * lmag))
-            target_y = round(anchor_y + (ly / max(lmag, 1e-6)) * radius_y * (0.55 + 0.45 * lmag))
+            target_x = round(anchor_x + (lx / max(lmag, 1e-6)) * radius * (0.55 + 0.45 * lmag))
+            target_y = round(anchor_y + (ly / max(lmag, 1e-6)) * radius * (0.55 + 0.45 * lmag))
             # Move o cursor do sistema para o alvo do movimento direto (evento absoluto via SendInput).
             # Mantém o cursor dentro da área jogável (borda de 2 px).
             target_x = int(clamp(target_x, rect.left + 2, rect.right - 2))

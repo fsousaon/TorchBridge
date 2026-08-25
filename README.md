@@ -155,8 +155,7 @@ Os campos mais úteis são:
   "movement": {
     "anchor_x": 0.5,
     "anchor_y": 0.47,
-    "radius_x_percent": 0.16,
-    "radius_y_percent": 0.13
+    "movement_radius_percent": 0.16
   },
   "cursor": {
     "speed_pixels_per_second": 1450
@@ -166,7 +165,7 @@ Os campos mais úteis são:
 
 - `deadzone`: aumente se o personagem andar sozinho; reduza para maior resposta.
 - `response_curve`: maior deixa o começo do analógico mais preciso.
-- `radius_x_percent` e `radius_y_percent`: aumente se o personagem andar pouco.
+- `movement_radius_percent`: raio circular do click-to-move, em fração da altura da janela (mesmo alcance nos eixos x e y). Aumente se o personagem andar pouco.
 - `speed_pixels_per_second`: velocidade do cursor analógico.
 - `bindings`: troca as teclas ligadas aos botões e à roda 1–6.
 - `overlay.enabled`: use `false` para desligar somente os elementos visuais.
