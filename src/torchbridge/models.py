@@ -110,16 +110,30 @@ def both_panels_open(active_panels: list[str]) -> bool:
 PANEL_WIDTH_FRACTION_OF_HEIGHT = 7 / 15
 
 
-# Botão de fechar (X) do painel: a forma que o JOGO hit-testa não é uma caixa, é uma
-# aba com base reta na borda interna do painel e ponta voltada para o interior
-# (medidos pixel a pixel no botão VERMELHO REAL do jogo em docs/proporcao/
-# calibracao1.png: y 132–155 de 486 → altura ~0.05 da janela; ponta x 207 vs base
-# x 220 → protrusão ~13px = 0.057 da largura do painel; topo/base estreitos ~3px
-# = 0.015 do painel; base reta na borda interna). Ajuste aqui.
-CLOSE_TAB_TOP_FRACTION = 0.27      # topo da aba, em fração da ALTURA da janela
-CLOSE_TAB_BOTTOM_FRACTION = 0.32   # base da aba, em fração da altura da janela
-CLOSE_TAB_EDGE_WIDTH = 0.015       # largura no topo e na base, em fração da largura do painel
-CLOSE_TAB_TIP_WIDTH = 0.06         # largura máxima (ponta, na altura do meio), em fração do painel
+# Botão de fechar (X) do painel: a forma que o JOGO hit-testa é uma aba com base
+# RETA na borda interna do painel e ponta em seta voltada para o interior do
+# painel (painel esquerdo aponta à esquerda; direito é o espelho). A forma exata
+# (8 vértices) vem do botão extraído do jogo em
+# docs/proporcao/close-button-shape.svg — ver _CLOSE_TAB_SVG abaixo: base larga e
+# reta na borda, "ponta" que é uma aresta reta (não um ponto), topo e base com
+# extremidades chanfradas. O ajuste calibrável aqui é o posicionamento: calibracao3
+# pediu +8% de tamanho (TOP/BOTTOM expandiram 0.002 cada), depois "sobe 5%" (subiu
+# 15.9px a 1080p), que subiu demais — voltou metade (7.95px). Centro em 0.28765
+# da altura (0.295 original - 0.00735).
+CLOSE_TAB_TOP_FRACTION = 0.26065   # topo da aba, em fração da ALTURA da janela
+CLOSE_TAB_BOTTOM_FRACTION = 0.31465 # base da aba, em fração da altura da janela
+# Aspecto da forma do SVG (profundidade/altura = 41/73): calibracao1.png mediu
+# 13px de profundidade para 23px de altura — mesma razão, então escalar a altura
+# escala a largura junto, preservando a forma real do botão.
+CLOSE_TAB_ASPECT = 41 / 73
+# Vértices exatos da forma no SVG (viewBox 41x73, botão do painel esquerdo sem
+# espelhar): x=41 é a borda interna do painel, x=0 é a ponta da seta. Ordem segue
+# o path do SVG (fechada, sem auto-interseção).
+_CLOSE_TAB_SVG = (
+    (30.5, 0), (41, 9.5), (41, 62.5), (30.5, 73),
+    (23.5, 73), (0, 49.5), (0, 23.5), (23.5, 0),
+)
+_SVG_W, _SVG_H = 41, 73
 
 
 # Largura do painel em pixels, a partir da altura da janela.
@@ -140,32 +154,24 @@ def panel_regions(rect: Rect) -> dict[str, tuple[int, int, int, int]]:
 
 # Vértices (x, y) absolutos da aba do botão fechar, em ordem para o hit-test de
 # polígono e para o QPainter. side 'left' = aba do painel esquerdo (borda interna na
-# direita do painel); 'right' = espelho no painel direito (borda interna na esquerda).
-# Forma: base RETA na borda interna (topo→base), estreita no topo/na base, alargando
-# até a ponta na altura do meio — como a aba real do Torchlight.
+# direita do painel, ponta apontando à esquerda); 'right' = espelho horizontal no
+# painel direito. A forma é o path exato do SVG (8 vértices) escalado: a altura da
+# aba vem das frações TOP/BOTTOM da janela e a profundidade (largura) vem do
+# aspecto do SVG, pra manter a silhueta real do botão do jogo.
 def close_tab_vertices(rect: Rect, side: str) -> list[tuple[float, float]]:
-    w = panel_width(rect)
-    edge_w = w * CLOSE_TAB_EDGE_WIDTH
-    tip_w = w * CLOSE_TAB_TIP_WIDTH
     top = rect.top + rect.height * CLOSE_TAB_TOP_FRACTION
     bottom = rect.top + rect.height * CLOSE_TAB_BOTTOM_FRACTION
-    mid = (top + bottom) / 2
+    height = bottom - top
+    depth = height * CLOSE_TAB_ASPECT
     if side == "left":
-        inner = rect.left + w
-        return [
-            (inner, top),            # canto interno superior (na borda do painel)
-            (inner - edge_w, top),   # canto externo superior
-            (inner - tip_w, mid),    # ponta, voltada para o interior do painel
-            (inner - edge_w, bottom),  # canto externo inferior
-            (inner, bottom),         # canto interno inferior (base reta na borda)
-        ]
-    inner = rect.right - w
+        inner = rect.left + panel_width(rect)
+        flip = -1.0  # a ponta da seta aponta para a esquerda (interior do painel esq.)
+    else:
+        inner = rect.right - panel_width(rect)
+        flip = 1.0
     return [
-        (inner, top),
-        (inner + edge_w, top),
-        (inner + tip_w, mid),
-        (inner + edge_w, bottom),
-        (inner, bottom),
+        (inner + flip * (_SVG_W - sx) / _SVG_W * depth, top + sy / _SVG_H * height)
+        for sx, sy in _CLOSE_TAB_SVG
     ]
 
 

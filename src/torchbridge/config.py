@@ -46,7 +46,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_aim_marker": True,
         "show_mode_badge": True,
         # Zonas de calibração dos painéis (caixas de fechar/central) visíveis no overlay.
-        "show_calibration": True,
+        "show_calibration": False,
     },
     # Botões → teclas do Torchlight; radial_slots são os atalhos da roda (1..N, N = tamanho da lista).
     "bindings": {
