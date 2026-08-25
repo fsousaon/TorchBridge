@@ -36,3 +36,20 @@ class RadialSessionResetTests(unittest.TestCase):
             engine._reset_radial_session()
             self.assertEqual(engine._active_panels, ["", ""])
             self.assertIsNone(engine._radial_selection)
+
+    # ESC (binding de start) fecha os menus: todos os painéis abertos são esquecidos, não só um.
+    def test_esc_resets_all_open_panels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._make_engine(directory)
+            engine._active_panels = ["C", "I"]
+            engine._reset_active_panels()
+            self.assertEqual(engine._active_panels, ["", ""])
+            self.assertEqual(shared.get().active_panels, ["", ""])
+
+    # ESC sem painel aberto não altera nada.
+    def test_esc_reset_is_noop_when_no_panels_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._make_engine(directory)
+            engine._reset_active_panels()
+            self.assertEqual(engine._active_panels, ["", ""])
+            self.assertEqual(shared.get().active_panels, ["", ""])

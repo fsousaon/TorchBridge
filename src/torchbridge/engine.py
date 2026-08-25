@@ -61,14 +61,19 @@ class BridgeEngine(threading.Thread):
         self._center_combo_started: float | None = None
         self._center_combo_triggered = False
 
+    # Esquece os painéis que a roda acompanhava (ESC fechou os menus do jogo ou sessão nova).
+    def _reset_active_panels(self) -> None:
+        self._active_panels = ["", ""]
+        self.shared.update(active_panels=list(self._active_panels))
+
     # Nova sessão do jogo (borda de subida): reseta o estado da roda. Um encerramento
     # forçado (Alt+F4) não limpa o estado, e sem esse reset o primeiro toque na roda
     # depois de reabrir o jogo fariam um toggle no estado fantasma (painel 'fechando'
     # em vez de 'abrindo') — o deslocamento do overlay não apareceria.
     def _reset_radial_session(self) -> None:
-        self._active_panels = ["", ""]
+        self._reset_active_panels()
         self._radial_selection = None
-        self.shared.update(active_panels=list(self._active_panels), radial_selection=None)
+        self.shared.update(radial_selection=None)
 
     # Pede a parada; a thread encerra no próximo ciclo.
     def stop(self) -> None:
@@ -209,6 +214,8 @@ class BridgeEngine(threading.Thread):
             # Borda de descida do Start (sem combo) → dispara o binding de Start (ESC por padrão).
             if self._previous.pressed("start") and not start:
                 self._tap_binding(bindings.get("start", "ESC"))
+                # O ESC fechou os menus do jogo: esquece os painéis que a roda acompanhava.
+                self._reset_active_panels()
 
         # Nenhum botão central pressionado: zera o estado do combo para a próxima tentativa.
         if not back and not start:
