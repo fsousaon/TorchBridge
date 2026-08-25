@@ -4,7 +4,7 @@ analysis = Analysis(
     ["launcher.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=[("assets/images/radial-menu-icons", "assets/images/radial-menu-icons")],
     hiddenimports=["pygame._sdl2.controller"],
     hookspath=[],
     hooksconfig={},

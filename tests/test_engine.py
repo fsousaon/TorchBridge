@@ -129,3 +129,80 @@ class LeftStickFreeCursorTests(unittest.TestCase):
             # Movimento direto saltou para o ponto-âncora e reteve o clique esquerdo.
             self.assertEqual(len(injector.moved), 1)
             self.assertTrue(injector.buttons.get("left", False))
+
+
+class CenterClickPanelResetTests(unittest.TestCase):
+    # Monta um engine com painel esquerdo+direito abertos e um injector fake.
+    def _make_engine(self, directory: str, cursor: tuple[int, int]) -> tuple[BridgeEngine, SharedOverlayState, FakeInjector]:
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        engine._active_panels = ["C", "I"]
+        injector = FakeInjector()
+        injector.cursor = cursor
+        engine.injector = injector
+        return engine, shared, injector
+
+    def _tick(self, engine: BridgeEngine, rt: float, directory: str) -> FakeInjector:
+        cfg = engine.config.get()
+        rect = Rect(0, 0, 1920, 1080)
+        state = ControllerState(connected=True, rt=rt)
+        engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+        return engine.injector  # type: ignore[return-value]
+
+    # Clique esquerdo (RT) na zona central com os dois painéis 'abertos' no estado: o jogo
+    # fechou o menu, então o estado é esvaziado — o terceiro caminho de sincronização.
+    def test_center_click_resets_panels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, _ = self._make_engine(directory, cursor=(960, 540))
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["", ""])
+            self.assertEqual(shared.get().active_panels, ["", ""])
+
+    # Clique DENTRO do painel esquerdo (fora da caixa de fechar) não zera o estado
+    # (o menu seguiu aberto no jogo).
+    def test_panel_click_keeps_panels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._make_engine(directory, cursor=(100, 100))
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["C", "I"])
+
+    # Clique na aba de fechar ESQUERDA: fecha só o painel esquerdo, o direito permanece.
+    # 1920x1080: aba esq. x≈473.76–504, y 291.6–345.6 → ponto (490, 318).
+    def test_close_left_box_closes_only_left(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, _ = self._make_engine(directory, cursor=(490, 318))
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["", "I"])
+            self.assertEqual(shared.get().active_panels, ["", "I"])
+
+    # Clique na aba de fechar DIREITA: espelho — fecha só o painel direito.
+    # Aba dir. x 1416–≈1446.24 → ponto (1430, 318).
+    def test_close_right_box_closes_only_right(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._make_engine(directory, cursor=(1430, 318))
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["C", ""])
+
+    # Clique na aba de fechar sem o correspondente painel aberto: nada muda.
+    def test_close_box_noop_when_panel_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._make_engine(directory, cursor=(490, 318))
+            engine._active_panels = ["", "I"]
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["", "I"])
+
+    # Clique retido (sem nova borda de subida) não dispara o reset de novo: só o primeiro toque conta.
+    def test_held_click_does_not_repeat_reset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._make_engine(directory, cursor=(960, 540))
+            # Primeiro toque no centro: reseta (estado já fica limpo).
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["", ""])
+            # Simula um painel aberto de novo durante o clique ainda retido...
+            engine._active_panels = ["I", ""]
+            # ...e continua segurando RT no centro: sem borda, o estado NÃO é tocado.
+            self._tick(engine, rt=1.0, directory=directory)
+            self.assertEqual(engine._active_panels, ["I", ""])
+            self.assertTrue(injector.buttons.get("left", False))

@@ -10,7 +10,15 @@ from typing import Any
 from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
-from .models import ControllerState, Rect, SharedOverlayState, both_panels_open, panels_x_shift, toggle_panel
+from .models import (
+    ControllerState,
+    Rect,
+    SharedOverlayState,
+    both_panels_open,
+    click_zone,
+    panels_x_shift,
+    toggle_panel,
+)
 from .win32 import (
     InputInjector,
     WindowLocator,
@@ -43,6 +51,8 @@ class BridgeEngine(threading.Thread):
         self._mode = initial["movement"]["initial_mode"]
         # Estado do tick anterior: detecta bordas (transições), nunca auto-repeat.
         self._previous = ControllerState()
+        # Clique esquerdo retido no tick anterior (borda de subida do clique).
+        self._previous_left_pressed = False
         # Teclas e botões de mouse retidos agora (liberados todos na perda de foco/saída).
         self._held_keys: set[str] = set()
         self._held_mouse: set[str] = set()
@@ -381,9 +391,30 @@ class BridgeEngine(threading.Thread):
         # Limiar do perfil: a partir de quanto o gatilho vira clique.
         threshold = float(cfg["input"]["trigger_threshold"])
         # Clique esquerdo: retido no movimento direto (click-to-move) ou com RT fundo.
-        self._set_mouse("left", auto_move or state.rt >= threshold)
+        left_pressed = auto_move or state.rt >= threshold
+        self._set_mouse("left", left_pressed)
         # Clique direito (habilidade secundária) com LT fundo.
         self._set_mouse("right", state.lt >= threshold)
+        # Borda de subida do clique esquerdo: sincroniza com o fechamento de menus do jogo
+        # (mesma regra do ESC/Alt+F4). Botão do painel = fecha só aquele lado; zona central
+        # com os dois abertos = fechou tudo.
+        if left_pressed and not self._previous_left_pressed:
+            cursor_x, cursor_y = self.injector.cursor_position()
+            zone = click_zone(rect, cursor_x, cursor_y)
+            # Botão fechar do painel ESQUERDO: o jogo fechou só o lado esquerdo.
+            if zone == "close_left" and self._active_panels[0]:
+                self._active_panels[0] = ""
+                self.shared.update(active_panels=list(self._active_panels))
+            # Botão fechar do painel DIREITO: espelho do caso acima.
+            elif zone == "close_right" and self._active_panels[1]:
+                self._active_panels[1] = ""
+                self.shared.update(active_panels=list(self._active_panels))
+            # Ambos abertos e clique no meio (fora dos painéis): o jogo fechou os dois.
+            # Restringido a ambos-abertos para não interferir no click-to-move (um painel só),
+            # cuja âncora ainda cai na zona central.
+            elif zone == "center" and both_panels_open(self._active_panels):
+                self._reset_active_panels()
+        self._previous_left_pressed = left_pressed
 
     # Loop principal da thread: lê controle → confere foco → age → espera o restante do período.
     def run(self) -> None:

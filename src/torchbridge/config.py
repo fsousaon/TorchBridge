@@ -45,6 +45,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "scale": 1.0,
         "show_aim_marker": True,
         "show_mode_badge": True,
+        # Zonas de calibração dos painéis (caixas de fechar/central) visíveis no overlay.
+        "show_calibration": True,
     },
     # Botões → teclas do Torchlight; radial_slots são os atalhos da roda (1..N, N = tamanho da lista).
     "bindings": {
@@ -191,6 +193,10 @@ class ConfigManager:
         )
         # Escala do overlay entre 0.6× e 2.0×.
         data["overlay"]["scale"] = clamp(float(data["overlay"]["scale"]), 0.6, 2.0)
+        # Marcadores visuais: tipos booleanos, senão volta ao padrão da seção.
+        for flag in ("enabled", "show_aim_marker", "show_mode_badge", "show_calibration"):
+            if not isinstance(data["overlay"].get(flag), bool):
+                data["overlay"][flag] = deepcopy(DEFAULT_CONFIG["overlay"][flag])
         # Slots da roda precisam ser uma lista de strings.
         radial_slots = data["bindings"].get("radial_slots")
         if not isinstance(radial_slots, list) or not all(isinstance(item, str) for item in radial_slots):
