@@ -1,7 +1,7 @@
 # Testes do rastreador de painéis (toggle_panel): abertura, troca de lateral e fechamento por repetição.
 import unittest
 
-from torchbridge.models import PANEL_SIDE, toggle_panel, panels_x_shift
+from torchbridge.models import PANEL_SIDE, both_panels_open, toggle_panel, panels_x_shift
 
 
 class PanelToggleTests(unittest.TestCase):
@@ -70,6 +70,24 @@ class PanelsXShiftTests(unittest.TestCase):
     def test_short_list_is_tolerated(self):
         self.assertEqual(panels_x_shift(["C"]), 0.125)
         self.assertEqual(panels_x_shift([]), 0.0)
+
+
+class BothPanelsOpenTests(unittest.TestCase):
+    # Só uma lateral aberta → False (movimento direto segue normal).
+    def test_single_panel_is_not_both(self):
+        self.assertFalse(both_panels_open(["C", ""]))
+        self.assertFalse(both_panels_open(["", "I"]))
+
+    # Ambas abertas → True (esquerdo vira cursor livre, sem click-to-move).
+    def test_both_panels_is_true(self):
+        self.assertTrue(both_panels_open(["C", "I"]))
+        self.assertTrue(both_panels_open(["P", "Q"]))
+
+    # Nenhuma aberta → False; listas curtas tratadas como lado vazio.
+    def test_empty_and_short_lists(self):
+        self.assertFalse(both_panels_open(["", ""]))
+        self.assertFalse(both_panels_open([]))
+        self.assertFalse(both_panels_open(["C"]))
 
 
 if __name__ == "__main__":

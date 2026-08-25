@@ -10,7 +10,7 @@ from typing import Any
 from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
-from .models import ControllerState, Rect, SharedOverlayState, panels_x_shift, toggle_panel
+from .models import ControllerState, Rect, SharedOverlayState, both_panels_open, panels_x_shift, toggle_panel
 from .win32 import (
     InputInjector,
     WindowLocator,
@@ -296,8 +296,15 @@ class BridgeEngine(threading.Thread):
         auto_move = False
         aim_local: tuple[int, int] | None = None
 
-        # Movimento direto: exige analógico esquerdo inclinado, direito parado e roda fechada.
-        if self._mode == "direct" and lmag > 0 and rmag == 0 and not radial_active:
+        # Movimento direto: exige analógico esquerdo inclinado, direito parado, roda fechada
+        # e ao menos uma lateral livre — com os dois painéis abertos, o esquerdo vira cursor livre.
+        if (
+            self._mode == "direct"
+            and lmag > 0
+            and rmag == 0
+            and not radial_active
+            and not both_panels_open(self._active_panels)
+        ):
             # Âncora do herói em pixels, a partir das frações do perfil.
             # Painel lateral aberto sozinho desloca a âncora para o lado oposto (área visível).
             anchor_shift = panels_x_shift(self._active_panels)
@@ -324,6 +331,9 @@ class BridgeEngine(threading.Thread):
                 cursor_x, cursor_y, cursor_mag = rx, ry, rmag
             # No modo cursor/menus, o analógico esquerdo assume o papel de cursor.
             elif self._mode == "cursor" and lmag > 0:
+                cursor_x, cursor_y, cursor_mag = lx, ly, lmag
+            # Ambos os painéis abertos: o esquerdo vira cursor livre (sem o click-to-move).
+            elif lmag > 0 and both_panels_open(self._active_panels):
                 cursor_x, cursor_y, cursor_mag = lx, ly, lmag
 
             # Há movimento de cursor: desloca da posição atual em vez de saltar para um ponto fixo.

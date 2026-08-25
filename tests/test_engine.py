@@ -5,7 +5,36 @@ import unittest
 
 from torchbridge.config import ConfigManager
 from torchbridge.engine import BridgeEngine
-from torchbridge.models import SharedOverlayState
+from torchbridge.mathutils import cursor_delta
+from torchbridge.models import ControllerState, Rect, SharedOverlayState
+
+
+class FakeInjector:
+    # Substituto do InputInjector: grava os eventos em vez de enviá-los ao Windows.
+    def __init__(self) -> None:
+        self.moved: list[tuple[int, int]] = []
+        self.cursor = (100, 100)
+        self.buttons: dict[str, bool] = {}
+
+    def move(self, x: int, y: int) -> bool:
+        self.moved.append((x, y))
+        return True
+
+    def cursor_position(self) -> tuple[int, int]:
+        return self.cursor
+
+    def key(self, name: str, down: bool) -> bool:
+        self.buttons[name] = down
+        return True
+
+    def mouse_button(self, button: str, down: bool) -> bool:
+        self.buttons[button] = down
+        return True
+
+
+class FakeHub:
+    def rumble(self, *args: object) -> None:
+        pass
 
 
 class RadialSessionResetTests(unittest.TestCase):
@@ -53,3 +82,50 @@ class RadialSessionResetTests(unittest.TestCase):
             engine._reset_active_panels()
             self.assertEqual(engine._active_panels, ["", ""])
             self.assertEqual(shared.get().active_panels, ["", ""])
+
+
+class LeftStickFreeCursorTests(unittest.TestCase):
+    # Com os dois painéis abertos, o analógico esquerdo move o cursor livremente
+    # (deslocamento relativo) e NÃO segura o clique do click-to-move.
+    def test_both_panels_open_moves_cursor_without_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            engine._active_panels = ["C", "I"]
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            state = ControllerState(connected=True, lx=1.0, ly=0.0)
+
+            engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+
+            # O cursor andou a partir da posição atual (100, 100) em direção a +x...
+            expected_dx, _ = cursor_delta(
+                1.0, 0.0, float(cfg["cursor"]["speed_pixels_per_second"]), 0.05
+            )
+            self.assertEqual(injector.moved, [(100 + int(expected_dx), 100)])
+            # ...e o clique esquerdo NÃO ficou retido (click-to-move desligado).
+            self.assertFalse(injector.buttons.get("left", False))
+
+    # Com só um painel aberto, o comportamento clássico permanece: movimento direto segura o clique.
+    def test_single_panel_keeps_click_to_move(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            engine._active_panels = ["I", ""]
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            state = ControllerState(connected=True, lx=1.0, ly=0.0)
+
+            engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+
+            # Movimento direto saltou para o ponto-âncora e reteve o clique esquerdo.
+            self.assertEqual(len(injector.moved), 1)
+            self.assertTrue(injector.buttons.get("left", False))

@@ -97,6 +97,13 @@ def panels_x_shift(active_panels: list[str]) -> float:
     return 0.0
 
 
+# Com os dois painéis laterais abertos de uma vez, a tela útil fica pequena demais para o
+# movimento direto: o analógico esquerdo vira cursor livre (sem o clique do click-to-move).
+def both_panels_open(active_panels: list[str]) -> bool:
+    left, right = (list(active_panels) + ["", ""])[:2]
+    return bool(left and right)
+
+
 @dataclass(frozen=True)
 # Estado visual imutável que o motor publica para o overlay Qt desenhar.
 class OverlaySnapshot:
