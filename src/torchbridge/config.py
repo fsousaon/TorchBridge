@@ -34,6 +34,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "anchor_x": 0.50,
         "anchor_y": 0.47,
         "movement_radius_percent": 0.16,
+        # Fração do raio onde o cursor começa ao sair da deadzone: o clique do click-to-move
+        # cai perto do personagem (longe de NPCs/inimigos) e o cursor cresce até o raio
+        # cheio conforme o stick é empurrado (o botão fica segurado e o herói segue).
+        "click_center_fraction": 0.15,
     },
     # Velocidade máxima do cursor analógico, em pixels por segundo.
     "cursor": {
@@ -190,6 +194,10 @@ class ConfigManager:
         data["movement"]["movement_radius_percent"] = clamp(
             # Raio do movimento limitado a 3%–45% da altura da janela.
             float(data["movement"]["movement_radius_percent"]), 0.03, 0.45
+        )
+        data["movement"]["click_center_fraction"] = clamp(
+            # O clique inicial fica entre 5% e 80% do raio da âncora (nunca no ponto cego).
+            float(data["movement"]["click_center_fraction"]), 0.05, 0.80
         )
         # Modo inicial só aceita valores conhecidos.
         if data["movement"].get("initial_mode") not in {"direct", "cursor"}:

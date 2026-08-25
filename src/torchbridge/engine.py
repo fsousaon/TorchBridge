@@ -53,6 +53,10 @@ class BridgeEngine(threading.Thread):
         self._previous = ControllerState()
         # Clique esquerdo retido no tick anterior (borda de subida do clique).
         self._previous_left_pressed = False
+        # Movimento direto ativo no tick anterior (borda de descida -> devolver o cursor ao centro).
+        self._direct_move_active = False
+        # Âncora (x, y em px) do último movimento direto: pra onde o cursor volta ao soltar o stick.
+        self._last_anchor: tuple[int, int] | None = None
         # Teclas e botões de mouse retidos agora (liberados todos na perda de foco/saída).
         self._held_keys: set[str] = set()
         self._held_mouse: set[str] = set()
@@ -140,6 +144,8 @@ class BridgeEngine(threading.Thread):
             self.injector.mouse_button(button, False)
         self._held_keys.clear()
         self._held_mouse.clear()
+        # Interrompe o "movimento direto ativo" para o retorno ao centro não disparar no tick de volta.
+        self._direct_move_active = False
         self.shared.update(
             radial_active=False,
             radial_selection=None,
@@ -304,6 +310,7 @@ class BridgeEngine(threading.Thread):
         rx, ry, rmag = radial_deadzone(state.rx, state.ry, deadzone, curve)
         radial_active = state.pressed("lb")
         auto_move = False
+        cursor_active = False
         aim_local: tuple[int, int] | None = None
 
         # Movimento direto: exige analógico esquerdo inclinado, direito parado, roda fechada
@@ -322,12 +329,18 @@ class BridgeEngine(threading.Thread):
                 float(movement["anchor_x"]) + anchor_shift, 0.05, 0.95
             )
             anchor_y = rect.top + rect.height * float(movement["anchor_y"])
+            # Memória da âncora atual: destino do retorno do cursor ao soltar o stick.
+            self._last_anchor = (round(anchor_x), round(anchor_y))
             # Raio circular: fração da ALTURA da janela nos dois eixos (área de movimento = círculo
             # ideal, sem ovalizar nas laterais como quando o eixo x usava a largura).
             radius = rect.height * float(movement["movement_radius_percent"])
-            # Cursor na direção (x,y)/|v| × raio; o fator 0.55+0.45·mag amplia o alcance com a inclinação.
-            target_x = round(anchor_x + (lx / max(lmag, 1e-6)) * radius * (0.55 + 0.45 * lmag))
-            target_y = round(anchor_y + (ly / max(lmag, 1e-6)) * radius * (0.55 + 0.45 * lmag))
+            # Distância do cursor em fração do raio: começa em click_center_fraction (perto da
+            # âncora — o clique do click-to-move cai longe de NPCs/inimigos) e cresce até o raio
+            # cheio conforme o stick é empurrado; o botão fica segurado e o herói segue o cursor.
+            center_frac = float(movement["click_center_fraction"])
+            reach = center_frac + (1.0 - center_frac) * lmag
+            target_x = round(anchor_x + (lx / max(lmag, 1e-6)) * radius * reach)
+            target_y = round(anchor_y + (ly / max(lmag, 1e-6)) * radius * reach)
             # Move o cursor do sistema para o alvo do movimento direto (evento absoluto via SendInput).
             # Mantém o cursor dentro da área jogável (borda de 2 px).
             target_x = int(clamp(target_x, rect.left + 2, rect.right - 2))
@@ -349,6 +362,7 @@ class BridgeEngine(threading.Thread):
 
             # Há movimento de cursor: desloca da posição atual em vez de saltar para um ponto fixo.
             if cursor_mag > 0:
+                cursor_active = True
                 current_x, current_y = self.injector.cursor_position()
                 speed = float(cfg["cursor"]["speed_pixels_per_second"])
                 # Delta em pixels; dt limitado a 50 ms para o cursor não 'saltar' após engasgos.
@@ -358,6 +372,13 @@ class BridgeEngine(threading.Thread):
                 target_y = int(clamp(round(current_y + dy), rect.top + 2, rect.bottom - 2))
                 self.injector.move(target_x, target_y)
                 aim_local = (target_x - rect.left, target_y - rect.top)
+
+        # Borda de descida do movimento direto: o stick voltou pra dentro da deadzone (ou o modo
+        # trocou) e NADA mais está movendo o cursor — devolve o cursor para a âncora do herói,
+        # para o próximo click-to-move nascer no centro e não cair em cima de um NPC/inimigo.
+        if not auto_move and not cursor_active and self._direct_move_active and self._last_anchor:
+            self.injector.move(*self._last_anchor)
+        self._direct_move_active = auto_move
 
         # Publica o marcador de mira no overlay (posição relativa à janela).
         if cfg["overlay"].get("show_aim_marker", True) and aim_local:

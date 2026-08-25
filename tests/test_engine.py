@@ -5,7 +5,7 @@ import unittest
 
 from torchbridge.config import ConfigManager
 from torchbridge.engine import BridgeEngine
-from torchbridge.mathutils import cursor_delta
+from torchbridge.mathutils import cursor_delta, radial_deadzone
 from torchbridge.models import ControllerState, Rect, SharedOverlayState
 
 
@@ -124,6 +124,90 @@ class DirectMovementCircleTests(unittest.TestCase):
                 msg=f"Alcance diagonal = {dist:.1f} não bate com o raio circular {radius:.1f}",
             )
 
+    # Perto da deadzone o cursor fica junto da âncora (clique central do click-to-move):
+    # o alcance em fração do raio deve ser ~click_center_fraction, não 55% como era antes.
+    # Assim o clique cai perto do herói, longe de NPCs/inimigos, e o cursor só cresce
+    # até o raio cheio quando o stick é empurrado até o fim.
+    def test_low_stick_keeps_cursor_near_anchor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            radius = 1080 * float(cfg["movement"]["movement_radius_percent"])
+            anchor_x = 1920 * float(cfg["movement"]["anchor_x"])
+            anchor_y = 1080 * float(cfg["movement"]["anchor_y"])
+            center_frac = float(cfg["movement"]["click_center_fraction"])
+            dz = float(cfg["input"]["deadzone"])
+            curve = float(cfg["input"]["response_curve"])
+
+            # Stick levemente inclinado (mag 0.3, direção +x): o lmag vem da mesma função do engine.
+            _, _, lmag = radial_deadzone(0.3, 0.0, dz, curve)
+            self.assertGreater(lmag, 0.0)  # fora da deadzone, senão o teste é vazio
+            expected_reach = center_frac + (1.0 - center_frac) * lmag
+
+            state = ControllerState(connected=True, lx=0.3, ly=0.0)
+            engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+            x, y = injector.moved[-1]
+            dist = ((x - anchor_x) ** 2 + (y - anchor_y) ** 2) ** 0.5
+
+            # O cursor está na fração esperada do raio (1 px de folga p/ arredondamento).
+            self.assertLessEqual(
+                abs(dist - radius * expected_reach), 1.0,
+                msg=f"Alcance {dist:.1f} não bate com o esperado {radius * expected_reach:.1f} (reach {expected_reach:.2f})",
+            )
+            # E, o que importa: bem mais perto do que o antigo salto de 55% do raio.
+            self.assertLess(dist, radius * 0.55)
+
+    # Ao soltar o stick (voltar para a deadzone), o cursor é devolvido à âncora do herói:
+    # o próximo click-to-move nasce no centro e não cai em cima de um NPC/inimigo.
+    def test_releasing_stick_returns_cursor_to_anchor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            anchor = (round(1920 * float(cfg["movement"]["anchor_x"])),
+                      round(1080 * float(cfg["movement"]["anchor_y"])))
+
+            # Tick 1: stick cheio para a direita -> movimento direto ativo, cursor no raio cheio.
+            engine._process_active(FakeHub(), ControllerState(connected=True, lx=1.0, ly=0.0), rect, cfg, 0.0, 0.05)
+            self.assertNotEqual(injector.moved[-1], anchor)  # cursor saiu da âncora
+            self.assertTrue(engine._direct_move_active)
+
+            # Tick 2: stick de volta ao centro (deadzone) -> nada move o cursor -> retorno à âncora.
+            engine._process_active(FakeHub(), ControllerState(connected=True, lx=0.0, ly=0.0), rect, cfg, 0.0, 0.05)
+            self.assertEqual(injector.moved[-1], anchor)
+            self.assertFalse(engine._direct_move_active)
+
+    # O retorno não deve sequestrar o cursor quando outro eixo está o movendo (cursor livre/direito).
+    def test_return_does_not_override_active_cursor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = ConfigManager(Path(directory) / "perfil.json")
+            engine = BridgeEngine(config, SharedOverlayState())
+            engine._mode = "direct"
+            injector = FakeInjector()
+            engine.injector = injector
+
+            cfg = config.get()
+            rect = Rect(0, 0, 1920, 1080)
+            anchor = (round(1920 * float(cfg["movement"]["anchor_x"])),
+                      round(1080 * float(cfg["movement"]["anchor_y"])))
+
+            # Tick 1: movimento direto ativo.
+            engine._process_active(FakeHub(), ControllerState(connected=True, lx=1.0, ly=0.0), rect, cfg, 0.0, 0.05)
+            # Tick 2: esquerdo solto, DIREITO inclinado -> cursor livre ativo; o retorno deve ceder.
+            engine._process_active(FakeHub(), ControllerState(connected=True, lx=0.0, ly=0.0, rx=1.0, ry=0.0), rect, cfg, 0.0, 0.05)
+            self.assertNotEqual(injector.moved[-1], anchor)  # o cursor seguiu o direito, não voltou
+            self.assertEqual(engine._direct_move_active, False)
 
 class LeftStickFreeCursorTests(unittest.TestCase):
     # Com os dois painéis abertos, o analógico esquerdo move o cursor livremente

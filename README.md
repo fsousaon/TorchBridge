@@ -101,6 +101,10 @@ sensação de controle direto sem alterar o jogo.
 O analógico direito assume o cursor quando é movimentado. Use os gatilhos para
 atacar ou lançar uma habilidade na posição indicada.
 
+Ao devolver o analógico esquerdo ao centro, o cursor volta automaticamente para
+a âncora do herói — o próximo `click-to-move` nasce no centro e não cai em cima
+de um NPC ou inimigo.
+
 ### Cursor / menus
 
 Pressione Back/Create/Select para entrar no modo cursor. Os dois analógicos
@@ -155,7 +159,8 @@ Os campos mais úteis são:
   "movement": {
     "anchor_x": 0.5,
     "anchor_y": 0.47,
-    "movement_radius_percent": 0.16
+    "movement_radius_percent": 0.16,
+    "click_center_fraction": 0.15
   },
   "cursor": {
     "speed_pixels_per_second": 1450
@@ -166,6 +171,7 @@ Os campos mais úteis são:
 - `deadzone`: aumente se o personagem andar sozinho; reduza para maior resposta.
 - `response_curve`: maior deixa o começo do analógico mais preciso.
 - `movement_radius_percent`: raio circular do click-to-move, em fração da altura da janela (mesmo alcance nos eixos x e y). Aumente se o personagem andar pouco.
+- `click_center_fraction`: a que distância da âncora (em fração do raio) o cursor começa ao sair da deadzone. É onde o clique do click-to-move cai. Baixo = clique mais perto do herói (não acerta NPC/inimigo); o cursor depois cresce até o raio cheio conforme o stick é empurrado.
 - `speed_pixels_per_second`: velocidade do cursor analógico.
 - `bindings`: troca as teclas ligadas aos botões e à roda 1–6.
 - `overlay.enabled`: use `false` para desligar somente os elementos visuais.
