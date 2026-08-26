@@ -16,6 +16,7 @@ from .models import (
     SharedOverlayState,
     both_panels_open,
     click_zone,
+    load_hud_mask,
     panels_x_shift,
     toggle_panel,
 )
@@ -74,6 +75,10 @@ class BridgeEngine(threading.Thread):
         self._center_combo_seen = False
         self._center_combo_started: float | None = None
         self._center_combo_triggered = False
+        # Silhueta verde da HUD inferior (área que não fecha painéis): rasterizada uma
+        # vez aqui e passada ao click_zone em cada borda de clique. None = sem asset
+        # (comportamento antigo: clique central com ambos abertos fecha tudo).
+        self._hud_mask = load_hud_mask()
 
     # Esquece os painéis que a roda acompanhava (ESC fechou os menus do jogo ou sessão nova).
     def _reset_active_panels(self) -> None:
@@ -422,7 +427,7 @@ class BridgeEngine(threading.Thread):
         # com os dois abertos = fechou tudo.
         if left_pressed and not self._previous_left_pressed:
             cursor_x, cursor_y = self.injector.cursor_position()
-            zone = click_zone(rect, cursor_x, cursor_y)
+            zone = click_zone(rect, cursor_x, cursor_y, self._hud_mask)
             # Botão fechar do painel ESQUERDO: o jogo fechou só o lado esquerdo.
             if zone == "close_left" and self._active_panels[0]:
                 self._active_panels[0] = ""
@@ -431,7 +436,9 @@ class BridgeEngine(threading.Thread):
             elif zone == "close_right" and self._active_panels[1]:
                 self._active_panels[1] = ""
                 self.shared.update(active_panels=list(self._active_panels))
-            # Ambos abertos e clique no meio (fora dos painéis): o jogo fechou os dois.
+            # Ambos abertos e clique no meio (fora dos painéis E fora da HUD): o jogo
+            # fechou os dois. A área verde da HUD (zone "hud") é interativa no jogo —
+            # o jogador apertou um botão ali — então NUNCA zera os painéis.
             # Restringido a ambos-abertos para não interferir no click-to-move (um painel só),
             # cuja âncora ainda cai na zona central.
             elif zone == "center" and both_panels_open(self._active_panels):

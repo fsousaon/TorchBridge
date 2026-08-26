@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from threading import Lock
+import os
+import sys
 import time
 
 
@@ -110,6 +113,137 @@ def both_panels_open(active_panels: list[str]) -> bool:
 PANEL_WIDTH_FRACTION_OF_HEIGHT = 7 / 15
 
 
+# HUD inferior do jogo (barra de vida/ícones de habilidade): o que é clicável no jogo —
+# o jogador aperta botões ali — é tratado como "área que não fecha painéis". A forma vem
+# de um SVG (assets/hud/hud-click-no-reset-variable.svg), desenhado na proporção da tela de
+# REFERÊNCIA 1920x1080: o VERDE do arquivo é a área interativa. O hit-test e o desenho do
+# modo de calibração usam o MESMO raster (mesmo esquema das abas de fechar, abaixo).
+#
+# Posição e tamanho da HUD em fração da LARGURA e da ALTURA da janela — o mesmo esquema
+# calibrável de CLOSE_TAB_TOP/BOTTOM_FRACTION. Com os dois painéis abertos (a tela útil
+# fica menor) a HUD se afasta das bordas, então o ponto de ancoragem também é uma fração
+# da largura (não um pixel fixo). Padrão (1920x1080): HUD centralizada, base colada ao
+# rodapé, largura = 1171/1920 da tela e altura = 141/1080 (mantém a proporção real).
+# Ajuste fino: rode com show_calibration e veja a silhueta verde alinhada com a HUD real.
+HUD_ASSET = "hud-click-no-reset-variable.svg"
+HUD_REF_WIDTH = 1920.0    # largura da tela em que o SVG foi desenhado
+HUD_REF_HEIGHT = 1080.0   # altura da tela em que o SVG foi desenhado
+HUD_WIDTH_FRACTION = 1171.0 / 1920.0     # largura da HUD = fração da largura da janela
+HUD_HEIGHT_FRACTION = 141.0 / 1080.0     # altura da HUD = fração da altura da janela
+HUD_CENTER_FRACTION = 0.501525           # centro horizontal (~3px à direita do miolo em 1080p)
+HUD_BOTTOM_FRACTION = 0.996293           # base da HUD (~6px acima do rodapé em 1080p)
+
+
+# Retângulo (x, y, w, h) em coordenadas absolutas onde a HUD inferior do jogo está
+# posicionada na janela — a região que a silhueta do SVG ocupa. Fonte única do hit-test
+# (hud_mask_hit) e do desenho do modo de calibração (overlay._draw_calibration).
+def hud_target_rect(rect: Rect) -> tuple[float, float, float, float]:
+    width = rect.width * HUD_WIDTH_FRACTION
+    height = rect.height * HUD_HEIGHT_FRACTION
+    left = rect.left + rect.width * HUD_CENTER_FRACTION - width / 2.0
+    top = rect.top + rect.height * HUD_BOTTOM_FRACTION - height
+    return (left, top, width, height)
+
+
+# Testa se um ponto (x, y em px) cai numa área VERDE da máscara (2D de bools). Sem máscara
+# ou fora da região da HUD: False (o ponto não é "área que não fecha painéis").
+def hud_mask_hit(
+    mask: tuple[int, int, list[bytes]] | None,
+    rect: Rect,
+    x: float,
+    y: float,
+) -> bool:
+    if not mask:
+        return False
+    left, top, width, height = hud_target_rect(rect)
+    if not (left <= x < left + width and top <= y < top + height):
+        return False
+    rows, cols, data = mask
+    # Mapeia o ponto absoluto para a grade da máscara (íntero); arredondar pra baixo e
+    # conferir a borda direita/inferior evita índice fora do range no último pixel.
+    px = int((x - left) / width * cols)
+    py = int((y - top) / height * rows)
+    if px < 0 or px >= cols or py < 0 or py >= rows:
+        return False
+    return bool(data[py * cols + px])
+
+
+# Rasteriza a silhueta VERDE do SVG num bitmap 2D (tuple: rows, cols, data). Lê o arquivo
+# via Qt (QSvgRenderer + QPixmap) e converte cada pixel em "preenchido?" (alfa > 0).
+# Retorna None se o asset não existir ou o Qt Svg não estiver disponível — o chamador
+# trata como "sem HUD" (cliques na área central seguem o comportamento antigo de fechar
+# tudo). A máscara é carregada uma única vez (engine __init__) e reutilizada; a resolução
+# é a nativa do SVG (1171x141), o que dá precisão de ~1 px em 1080p.
+#
+# Cache em módulo: a rasterização custa ~300 ms; o engine/overlay reutilizam o resultado.
+# O resultado (mesmo None, asset ausente) é guardado para não re-rasterizar a cada tick
+# de teste/inicialização.
+_HUD_MASK_CACHE: tuple[int, int, list[bytes]] | None | object = "unloaded"
+
+
+def load_hud_mask() -> tuple[int, int, list[bytes]] | None:
+    global _HUD_MASK_CACHE
+    if _HUD_MASK_CACHE != "unloaded":
+        return _HUD_MASK_CACHE  # type: ignore[return-value]
+    result = _rasterize_hud_mask()
+    if result is not None:
+        _HUD_MASK_CACHE = result
+    return result
+
+
+# O trabalho pesado do load_hud_mask: rasteriza o SVG e devolve o bitmap 2D (ou None).
+# Mantido à parte do cache para só publicar o resultado quando ele for realmente válido.
+def _rasterize_hud_mask() -> tuple[int, int, list[bytes]] | None:
+    path = hud_asset_path()
+    if path is None or not path.exists():
+        return None
+    try:
+        from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QGuiApplication
+        from PySide6.QtSvg import QSvgRenderer
+
+        # O Qt precisa de uma QGuiApplication para desenhar pixmaps; se não houver uma
+        # (ex.: testes unitários fora da UI), criamos uma offscreen efêmera.
+        app = QGuiApplication.instance()
+        if app is None:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+            app = QGuiApplication([])
+        renderer = QSvgRenderer()
+        if not renderer.load(str(path)):
+            return None
+        # Grade nativa do SVG (1171x141): a máscara mantém a resolução do asset.
+        target_w, target_h = 1171, 141
+        pixmap = QPixmap(target_w, target_h)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        # ARGB32 (não-premultiplicado): em little-endian cada pixel ocupa 4 bytes
+        # (B, G, R, A) — lemos o canal alpha (offset 3) direto do buffer, sem loop
+        # de .pixel() (165 mil iterações seriam lentas na inicialização).
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        rows, cols = image.height(), image.width()
+        buffer = image.constBits()
+        raw = bytes(buffer)
+        data = bytearray(rows * cols)
+        for y in range(rows):
+            row_offset = y * cols * 4
+            for x in range(cols):
+                if raw[row_offset + x * 4 + 3] > 0:
+                    data[y * cols + x] = 1
+        return (rows, cols, list(data))
+    except Exception:  # noqa: BLE001 - Qt indisponível não pode derrubar o engine.
+        return None
+
+
+# Caminho do asset da HUD: assets/hud/ do projeto, ou o bundle PyInstaller (sys.frozen).
+def hud_asset_path() -> Path | None:
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parent.parent.parent
+    return base / "assets" / "hud" / HUD_ASSET
+
+
 # Botão de fechar (X) do painel: a forma que o JOGO hit-testa é uma aba com base
 # RETA na borda interna do painel e ponta em seta voltada para o interior do
 # painel (painel esquerdo aponta à esquerda; direito é o espelho). A forma exata
@@ -189,14 +323,27 @@ def point_in_polygon(x: float, y: float, polygon: list[tuple[float, float]]) -> 
 
 
 # Região de um clique em relação aos painéis: "close_left" (aba fechar do painel
-# esquerdo), "left", "center", "right" ou "close_right" (aba do painel direito).
-# A aba do botão fecha só aquele lado; o resto do painel não fecha nada.
-def click_zone(rect: Rect, x: int, y: int) -> str:
+# esquerdo), "hud" (área interativa da HUD inferior — NÃO fecha painéis), "left",
+# "center", "right" ou "close_right" (aba do painel direito). A aba do botão fecha só
+# aquele lado; o resto do painel não fecha nada.
+#
+# hud_mask: bitmap da silhueta verde da HUD (load_hud_mask); quando passado, um clique
+# na área verde volta "hud" — o motor usa isso para NÃO zerar os painéis abertos. A
+# zona "hud" é checada DEPOIS das abas de fechar (que têm prioridade por serem mais
+# específicas) e ANTES dos retângulos de painel/centro.
+def click_zone(
+    rect: Rect,
+    x: int,
+    y: int,
+    hud_mask: tuple[int, int, list[bytes]] | None = None,
+) -> str:
     if not rect.contains(x, y):
         return "outside"
     for name, side in (("close_left", "left"), ("close_right", "right")):
         if point_in_polygon(x, y, close_tab_vertices(rect, side)):
             return name
+    if hud_mask is not None and hud_mask_hit(hud_mask, rect, x, y):
+        return "hud"
     regions = panel_regions(rect)
     for name, label in (("panel_left", "left"), ("panel_right", "right")):
         bx, by, bw, bh = regions[name]

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QWidget
 
 from .config import ConfigManager
@@ -17,6 +18,8 @@ from .models import (
     OverlaySnapshot,
     SharedOverlayState,
     close_tab_vertices,
+    hud_asset_path,
+    hud_target_rect,
     panel_regions,
     panels_x_shift,
 )
@@ -57,6 +60,9 @@ class GameOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         # Cache dos pixmaps do radial: carrega cada PNG uma única vez (desenhar a 60 FPS).
         self._radial_cache: dict[tuple[str, str], QPixmap] = {}
+        # Silhueta verde da HUD (modo de calibração): renderizada uma vez do SVG, se existir.
+        # None = asset ausente (nada a desenhar).
+        self._hud_pixmap = self._load_hud_pixmap()
         # Progresso da animação de entrada/saída do menu radial (0 = fechado, 1 = aberto).
         self._radial_progress = 0.0
         self._radial_last_time = time.monotonic()
@@ -149,6 +155,26 @@ class GameOverlay(QWidget):
             return None
         self._radial_cache[key] = pixmap
         return pixmap
+
+    # Silhueta verde da HUD inferior renderizada do SVG (1171x141, proporção 1920x1080).
+    # Usada SÓ no modo de calibração para mostrar a mesma área que o hit-test considera
+    # "não fecha painéis". None se o asset não existir ou o Qt Svg falhar.
+    def _load_hud_pixmap(self) -> QPixmap | None:
+        path = hud_asset_path()
+        if path is None or not path.exists():
+            return None
+        try:
+            renderer = QSvgRenderer()
+            if not renderer.load(str(path)):
+                return None
+            pixmap = QPixmap(1171, 141)
+            pixmap.fill(QColor(0, 0, 0, 0))
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            return pixmap
+        except Exception:  # noqa: BLE001 - sem Qt Svg o modo calibração segue sem a HUD.
+            return None
 
     # Roda central: emblema "Center" (assets) + um ícone por slot do perfil.
     # Sem arte disponível, volta ao desenho vetorial antigo (disco "MENUS" + círculos com letra).
@@ -308,6 +334,20 @@ class GameOverlay(QWidget):
         )
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(local(regions["center"]))
+        # HUD inferior: a MESMA silhueta verde que a click_zone hit-testa como "não fecha
+        # painéis" — desenhada na posição real (frações da janela) para calibrar o ajuste fino.
+        if self._hud_pixmap is not None:
+            hl, ht, hw, hh = hud_target_rect(rect)
+            # hud_target_rect devolve absolutos; converte para local do overlay.
+            target = QRectF(hl - rect.left, ht - rect.top, hw, hh)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.setPen(QPen(QColor(60, 235, 90, 120), 1.0 * scale))
+            painter.setBrush(QColor(60, 235, 90, 38))
+            painter.drawPixmap(
+                int(target.x()), int(target.y()), int(target.width()), int(target.height()),
+                self._hud_pixmap,
+            )
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         # Rótulos: o que cada zona faz (posicionados na bounding box da aba).
         painter.setFont(self._font(max(7, round(9 * scale)), True))
         painter.setPen(QColor(255, 159, 67, 245))
@@ -318,6 +358,22 @@ class GameOverlay(QWidget):
         painter.drawText(local(regions["panel_right"]).adjusted(0, 6 * scale, 0, 24 * scale), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "PAINEL")
         painter.setPen(QColor(120, 220, 150, 200))
         painter.drawText(local(regions["center"]).adjusted(0, 6 * scale, 0, 24 * scale), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "CENTRO (ZERA TUDO)")
+        if self._hud_pixmap is not None:
+            hl, ht, hw, hh = hud_target_rect(rect)
+            hud_local = QRectF(hl - rect.left, ht - rect.top, hw, hh)
+            painter.setFont(self._font(max(7, round(9 * scale)), True))
+            painter.setPen(QColor(120, 235, 90, 235))
+            # Rótulo numa faixa de 20px logo ACIMA do topo da HUD (o hud_local.top() já é
+            # o topo da silhueta; desenhá-lo dentro dela faria o verde sumir no verde).
+            label_box = QRectF(
+                hud_local.left(), hud_local.top() - 24 * scale,
+                hud_local.width(), 20 * scale,
+            )
+            painter.drawText(
+                label_box,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                "HUD (NÃO FECHA)",
+            )
 
     # Mensagens temporárias (conectado, calibrado, perfil recarregado...).
     def _draw_toast(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:

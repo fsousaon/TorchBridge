@@ -10,6 +10,9 @@ from torchbridge.models import (
     both_panels_open,
     click_zone,
     close_tab_vertices,
+    hud_mask_hit,
+    hud_target_rect,
+    load_hud_mask,
     panel_width,
     point_in_polygon,
     toggle_panel,
@@ -196,6 +199,99 @@ class CloseTabShapeTests(unittest.TestCase):
         left = close_tab_vertices(rect, "left")
         self.assertTrue(point_in_polygon(495, 318.6, left))   # perto da borda interna, no meio
         self.assertFalse(point_in_polygon(100, 318.6, left))  # longe, dentro do painel
+
+
+class HudMaskGeometryTests(unittest.TestCase):
+    # hud_target_rect: em 1080p padrão, HUD centralizada na base, 1171x141.
+    def test_target_rect_1080p(self):
+        rect = Rect(0, 0, 1920, 1080)
+        left, top, width, height = hud_target_rect(rect)
+        self.assertAlmostEqual(width, 1171.0, places=3)
+        self.assertAlmostEqual(height, 141.0, places=3)
+        # 1080p: centro em 1920*0.501525 e base em 1080*0.996293 → nudge de ~3px
+        # à direita e ~8px para cima em relação à posição original (0.5 / 1.0).
+        self.assertAlmostEqual(left, 1920.0 * 0.501525 - 1171.0 / 2.0, places=3)  # 377.428
+        self.assertAlmostEqual(top, 1080.0 * 0.996293 - 141.0, places=3)          # 935.0
+
+    # Janela deslocada: a HUD acompanha o retângulo (não a origem).
+    def test_target_rect_offset(self):
+        rect = Rect(100, 50, 1920, 1080)
+        left, top, width, height = hud_target_rect(rect)
+        self.assertAlmostEqual(left, 100 + 1920.0 * 0.501525 - 1171.0 / 2.0, places=3)
+        self.assertAlmostEqual(top, 50 + 1080.0 * 0.996293 - 141.0, places=3)
+
+    # hud_mask_hit: sem máscara → sempre False (comportamento antigo preservado).
+    def test_no_mask_never_hits(self):
+        rect = Rect(0, 0, 1920, 1080)
+        self.assertFalse(hud_mask_hit(None, rect, 960, 1045))
+        self.assertFalse(hud_mask_hit(None, rect, 500, 500))
+
+    # hud_mask_hit com máscara sintética 2x2: mapeia o ponto para a grade da HUD.
+    def test_mask_hit_synthetic_grid(self):
+        # Grade 2x2 com apenas o canto superior-direito preenchido (data = [0,1,0,0]).
+        rows, cols = 2, 2
+        data = [0, 1, 0, 0]
+        mask = (rows, cols, list(data))
+        rect = Rect(0, 0, 1920, 1080)
+        # hud_target_rect(1080p) = (377.428, 935.0, 1171, 141). Canto sup-dir da HUD
+        # cai em px=1, py=0 → data[0*2+1] = 1.
+        self.assertTrue(hud_mask_hit(mask, rect, 377.428 + 1171 / 2 + 1, 935.0 + 70.5 - 1))
+        # Canto sup-esq → data[0] = 0.
+        self.assertFalse(hud_mask_hit(mask, rect, 377.428 + 10, 935.0 + 10))
+        # Fora da região da HUD → False.
+        self.assertFalse(hud_mask_hit(mask, rect, 960, 540))
+
+
+class HudMaskAssetTests(unittest.TestCase):
+    # Carrega a máscara real do SVG (precisa de Qt offscreen). Se o asset não existir
+    # neste ambiente, os testes são pulados — a funcionalidade de hit-test já é coberta
+    # pelas classes acima com máscara sintética.
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.mask = load_hud_mask()
+        except Exception:
+            cls.mask = None
+
+    def _require_mask(self):
+        if self.mask is None:
+            self.skipTest("asset da HUD / Qt Svg indisponível neste ambiente")
+
+    def test_mask_dimensions_match_svg(self):
+        self._require_mask()
+        rows, cols, data = self.mask
+        self.assertEqual((rows, cols), (141, 1171))
+        self.assertEqual(len(data), rows * cols)
+
+    def test_mask_has_filled_pixels(self):
+        self._require_mask()
+        # O SVG verde tem ~84 mil pixels preenchidos — nunca zero.
+        self.assertGreater(sum(self.mask[2]), 1000)
+
+    def test_click_zone_hud_green_returns_hud(self):
+        self._require_mask()
+        rect = Rect(0, 0, 1920, 1080)
+        # Ponto verde conhecido: barra de vida no centro da base (960, 1070).
+        self.assertEqual(click_zone(rect, 960, 1070, self.mask), "hud")
+
+    def test_click_zone_center_gap_stays_center(self):
+        self._require_mask()
+        rect = Rect(0, 0, 1920, 1080)
+        # No meio da HUD, no vão entre o disco central e a barra de vida (960, 1058)
+        # → continua "center".
+        self.assertEqual(click_zone(rect, 960, 1058, self.mask), "center")
+
+    def test_close_tab_takes_priority_over_hud(self):
+        self._require_mask()
+        rect = Rect(0, 0, 1920, 1080)
+        # A aba de fechar (490, 318) tem prioridade sobre a HUD (que só existe no rodapé).
+        self.assertEqual(click_zone(rect, 490, 318, self.mask), "close_left")
+
+    def test_without_mask_center_is_unchanged(self):
+        # Sem máscara (asset ausente), o mesmo ponto verde volta "center" — o
+        # comportamento antigo (clique central zera os painéis) é preservado.
+        rect = Rect(0, 0, 1920, 1080)
+        self.assertEqual(click_zone(rect, 960, 1070), "center")
 
 
 if __name__ == "__main__":

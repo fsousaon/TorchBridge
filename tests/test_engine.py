@@ -331,3 +331,66 @@ class CenterClickPanelResetTests(unittest.TestCase):
             self._tick(engine, rt=1.0, directory=directory)
             self.assertEqual(engine._active_panels, ["I", ""])
             self.assertTrue(injector.buttons.get("left", False))
+
+
+class HudClickPanelResetTests(unittest.TestCase):
+    # Clique na área verde da HUD (barra/ícones do rodapé) com os dois painéis abertos:
+    # o jogador apertou um botão do jogo ali, então os painéis NÃO são zerados —
+    # diferente do clique no centro vazio (que o jogo usa para fechar tudo).
+    # Precisa da máscara real do SVG; sem o asset, os testes são pulados.
+    @classmethod
+    def setUpClass(cls):
+        from torchbridge.models import load_hud_mask
+        cls.mask = load_hud_mask()
+
+    def _require_mask(self):
+        if self.mask is None:
+            self.skipTest("asset da HUD / Qt Svg indisponível neste ambiente")
+
+    def _make_engine(self, directory: str, cursor: tuple[int, int]) -> tuple[BridgeEngine, SharedOverlayState, FakeInjector]:
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        engine._active_panels = ["C", "I"]
+        # Publica o estado inicial (ambos abertos) no overlay: assim a assert de
+        # shared verifica que o reset NUNCA publicou ['',''] (se o reset disparasse,
+        # o engine chamaria shared.update(active_panels=['','']) e a assert pegaria).
+        shared.update(active_panels=list(engine._active_panels))
+        injector = FakeInjector()
+        injector.cursor = cursor
+        engine.injector = injector
+        return engine, shared, injector
+
+    def _tick(self, engine: BridgeEngine) -> None:
+        cfg = engine.config.get()
+        rect = Rect(0, 0, 1920, 1080)
+        state = ControllerState(connected=True, rt=1.0)
+        engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+
+    # 1080p: barra de vida no centro da base (960, 1070) é verde no SVG → zona "hud".
+    def test_hud_click_does_not_reset_panels(self):
+        self._require_mask()
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, _ = self._make_engine(directory, cursor=(960, 1070))
+            self._tick(engine)
+            self.assertEqual(engine._active_panels, ["C", "I"])
+            self.assertEqual(shared.get().active_panels, ["C", "I"])
+
+    # Ícone de habilidade no disco central (930, 1015 — dentro da metade esquerda do
+    # círculo, verde no SVG) também é zona "hud" → não reseta. O centro exato (960) cai
+    # na fenda vertical do disco (gap), que volta "center" (coberto no test_models).
+    def test_hud_icon_click_does_not_reset_panels(self):
+        self._require_mask()
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._make_engine(directory, cursor=(930, 1015))
+            self._tick(engine)
+            self.assertEqual(engine._active_panels, ["C", "I"])
+
+    # Clique no centro VAZIO (960, 540 — longe da HUD) com ambos abertos continua zerando.
+    def test_center_click_still_resets(self):
+        self._require_mask()
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._make_engine(directory, cursor=(960, 540))
+            self._tick(engine)
+            self.assertEqual(engine._active_panels, ["", ""])
