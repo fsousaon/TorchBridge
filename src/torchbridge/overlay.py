@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
@@ -56,6 +57,11 @@ class GameOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         # Cache dos pixmaps do radial: carrega cada PNG uma única vez (desenhar a 60 FPS).
         self._radial_cache: dict[tuple[str, str], QPixmap] = {}
+        # Progresso da animação de entrada/saída do menu radial (0 = fechado, 1 = aberto).
+        self._radial_progress = 0.0
+        self._radial_last_time = time.monotonic()
+        # Duração da animação do radial em cada direção (aparecer e sumir).
+        self._radial_anim_seconds = 0.2
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         # Redesenho a cada 16 ms (~60 FPS); o motor publica o estado a 120 Hz.
@@ -68,9 +74,28 @@ class GameOverlay(QWidget):
             make_overlay_clickthrough(int(self.winId()))
             self._native_styled = True
 
+    # Avança o progresso da animação do menu radial em direção ao alvo (1 aberto / 0 fechado).
+    # Usa o tempo real entre ticks para a duração ser exata (0.4 s) em qualquer taxa do QTimer.
+    def _tick_radial_anim(self, snapshot: OverlaySnapshot) -> None:
+        target = 1.0 if snapshot.radial_active else 0.0
+        now = time.monotonic()
+        dt = now - self._radial_last_time
+        self._radial_last_time = now
+        # Sem nada a animar: mantém o progresso e para de gastar ciclos.
+        if abs(self._radial_progress - target) < 1e-3:
+            self._radial_progress = target
+            return
+        step = dt / self._radial_anim_seconds
+        if target > self._radial_progress:
+            self._radial_progress = min(target, self._radial_progress + step)
+        else:
+            self._radial_progress = max(target, self._radial_progress - step)
+
     # Acompanha o retângulo do jogo e mostra/esconde conforme o estado.
     def _refresh(self) -> None:
         snapshot = self.shared.get()
+        # A animação do radial avança pelo tempo real do tick, independente de visibilidade.
+        self._tick_radial_anim(snapshot)
         rect = snapshot.game_rect
         # Só desenha com overlay habilitado, jogo presente e janela válida.
         should_show = snapshot.enabled and snapshot.game_found and rect.valid
@@ -128,12 +153,24 @@ class GameOverlay(QWidget):
     # Roda central: emblema "Center" (assets) + um ícone por slot do perfil.
     # Sem arte disponível, volta ao desenho vetorial antigo (disco "MENUS" + círculos com letra).
     def _draw_radial(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
-        # Só enquanto LB estiver pressionado (radial_active).
-        if not snapshot.radial_active:
+        # A animação só termina quando o progresso chega ao alvo: a saída some aos poucos,
+        # então desenha enquanto houver progresso (LB solto e progresso ainda > 0).
+        progress = self._radial_progress
+        if progress <= 0.0:
             return
         # Painel lateral aberto sozinho desloca a roda para o lado oposto (12,5% da largura).
         shift = panels_x_shift(snapshot.active_panels)
         center = QPointF(self.width() / 2 + self.width() * shift, self.height() / 2)
+        # Easing suave (smoothstep) do progresso: entra e sai mais lento nas pontas,
+        # duração total continua sendo a do _tick_radial_anim (0.4 s nos dois sentidos).
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        painter.save()
+        # Aparência da animação: opacidade 0→1 e escala 0.7→1 em torno do centro da roda.
+        painter.setOpacity(eased)
+        scale_factor = 0.7 + 0.3 * eased
+        painter.translate(center.x(), center.y())
+        painter.scale(scale_factor, scale_factor)
+        painter.translate(-center.x(), -center.y())
         ring_radius = 126 * scale
         node_radius = 27 * scale
 
@@ -189,6 +226,8 @@ class GameOverlay(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     str(radial_slots[index]),
                 )
+        # Devolve transformações de estado (opacidade/translate/scale) ao desenhista.
+        painter.restore()
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:

@@ -43,9 +43,13 @@ assert prof["overlay"]["show_calibration"] is True, prof["overlay"]
 
 # Segundo snapshot com o menu radial aberto (LB) e o 2o slot marcado pelo análogo:
 # valida o desenho com as artes (Center.png + ícone ativo) sem exceções.
+# A animação agora só pinta o radial com progresso > 0; forçamos o estado "aberto"
+# (progresso 1.0) para exercitar o desenho completo das artes.
 shared.update(radial_active=True, radial_selection=2, aim_x=None, aim_y=None)
+overlay._radial_progress = 1.0
 overlay.grab().save("radial_smoke.png")
 shared.update(radial_active=False, radial_selection=None, aim_x=960, aim_y=540)
+overlay._radial_progress = 0.0
 
 print("OVERLAY OK: paint com calibração e radial (ícones + variante ativa) sem exceções")
 print("show_calibration:", prof["overlay"]["show_calibration"])
