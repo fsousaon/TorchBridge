@@ -107,29 +107,35 @@ def both_panels_open(active_panels: list[str]) -> bool:
     return bool(left and right)
 
 
-# Largura do painel do jogo medida na própria janela: ela escala com a ALTURA da janela
-# (7/15 ≈ 46,6%), não com a largura — o jogo mantém a interface sem distorção em qualquer
-# proporção de tela (224px em 480 de altura, 280px em 600, 468px em ~1003, sempre 7/15).
-PANEL_WIDTH_FRACTION_OF_HEIGHT = 7 / 15
+# Largura do painel do jogo medida na própria janela: ela escala com a ALTURA da janela,
+# não com a largura — o jogo mantém a interface sem distorção em qualquer proporção de
+# tela. Base 7/15 + 20px a mais por painel em 1080p (20/1080) para a área útil do painel.
+PANEL_WIDTH_FRACTION_OF_HEIGHT = 7 / 15 + 20.0 / 1080.0
+
+# A aba do botão FECHAR (laranja) do jogo fica ancorada na borda ORIGINAL do painel
+# (7/15): quando a área do painel ficou mais larga (+20px), a aba não acompanhou — ela
+# fica exatamente onde o jogo a desenha, então o hit-test/polígono dela usa essa fração.
+CLOSE_TAB_ANCHOR_FRACTION_OF_HEIGHT = 7 / 15
 
 
 # HUD inferior do jogo (barra de vida/ícones de habilidade): o que é clicável no jogo —
 # o jogador aperta botões ali — é tratado como "área que não fecha painéis". A forma vem
-# de um SVG (assets/hud/hud-click-no-reset-variable.svg), desenhado na proporção da tela de
-# REFERÊNCIA 1920x1080: o VERDE do arquivo é a área interativa. O hit-test e o desenho do
-# modo de calibração usam o MESMO raster (mesmo esquema das abas de fechar, abaixo).
+# de um SVG (assets/hud/hud-click-no-reset-variable.svg), desenhado na proporção da tela
+# de REFERÊNCIA 1920x1080: o VERDE do arquivo é a área interativa. O hit-test e o
+# desenho do modo de calibração usam o MESMO raster (mesmo esquema das abas de fechar).
 #
-# Posição e tamanho da HUD em fração da LARGURA e da ALTURA da janela — o mesmo esquema
-# calibrável de CLOSE_TAB_TOP/BOTTOM_FRACTION. Com os dois painéis abertos (a tela útil
-# fica menor) a HUD se afasta das bordas, então o ponto de ancoragem também é uma fração
-# da largura (não um pixel fixo). Padrão (1920x1080): HUD centralizada, base colada ao
-# rodapé, largura = 1171/1920 da tela e altura = 141/1080 (mantém a proporção real).
+# Posição e tamanho em FRAÇÃO DA ALTURA da janela — MESMO esquema dos painéis
+# (PANEL_WIDTH_FRACTION_OF_HEIGHT), porque o jogo escala a HUD pela altura da janela
+# (224px em 480 de altura etc.), não pela largura: escalar a largura pela largura da
+# janela "espicha" a silhueta pras laterais quando a altura muda (calibracao hud-2).
+# Padrão (1080p): HUD centralizada, base colada ao rodapé, SVG 925x136.
 # Ajuste fino: rode com show_calibration e veja a silhueta verde alinhada com a HUD real.
 HUD_ASSET = "hud-click-no-reset-variable.svg"
-HUD_REF_WIDTH = 1920.0    # largura da tela em que o SVG foi desenhado
-HUD_REF_HEIGHT = 1080.0   # altura da tela em que o SVG foi desenhado
-HUD_WIDTH_FRACTION = 1171.0 / 1920.0     # largura da HUD = fração da largura da janela
-HUD_HEIGHT_FRACTION = 141.0 / 1080.0     # altura da HUD = fração da altura da janela
+HUD_REF_HEIGHT = 1080.0    # altura da tela em que o SVG foi desenhado
+# Calibração ago/2026: SVG 925x136 ampliado +8% de largura e +5% de altura em relação
+# ao desenho (a área interativa real do jogo é um pouco maior que a silhueta do SVG).
+HUD_WIDTH_FRACTION_OF_HEIGHT = 925.0 * 1.08 / 1080.0  # largura da HUD = fração da ALTURA
+HUD_HEIGHT_FRACTION = 136.0 * 1.05 / 1080.0           # altura da HUD = fração da altura
 HUD_CENTER_FRACTION = 0.501525           # centro horizontal (~3px à direita do miolo em 1080p)
 HUD_BOTTOM_FRACTION = 0.996293           # base da HUD (~6px acima do rodapé em 1080p)
 
@@ -138,7 +144,7 @@ HUD_BOTTOM_FRACTION = 0.996293           # base da HUD (~6px acima do rodapé em
 # posicionada na janela — a região que a silhueta do SVG ocupa. Fonte única do hit-test
 # (hud_mask_hit) e do desenho do modo de calibração (overlay._draw_calibration).
 def hud_target_rect(rect: Rect) -> tuple[float, float, float, float]:
-    width = rect.width * HUD_WIDTH_FRACTION
+    width = rect.height * HUD_WIDTH_FRACTION_OF_HEIGHT
     height = rect.height * HUD_HEIGHT_FRACTION
     left = rect.left + rect.width * HUD_CENTER_FRACTION - width / 2.0
     top = rect.top + rect.height * HUD_BOTTOM_FRACTION - height
@@ -173,7 +179,7 @@ def hud_mask_hit(
 # Retorna None se o asset não existir ou o Qt Svg não estiver disponível — o chamador
 # trata como "sem HUD" (cliques na área central seguem o comportamento antigo de fechar
 # tudo). A máscara é carregada uma única vez (engine __init__) e reutilizada; a resolução
-# é a nativa do SVG (1171x141), o que dá precisão de ~1 px em 1080p.
+# é a nativa do SVG (sizeAt do QSvgRenderer), o que dá precisão de ~1 px em 1080p.
 #
 # Cache em módulo: a rasterização custa ~300 ms; o engine/overlay reutilizam o resultado.
 # O resultado (mesmo None, asset ausente) é guardado para não re-rasterizar a cada tick
@@ -210,8 +216,8 @@ def _rasterize_hud_mask() -> tuple[int, int, list[bytes]] | None:
         renderer = QSvgRenderer()
         if not renderer.load(str(path)):
             return None
-        # Grade nativa do SVG (1171x141): a máscara mantém a resolução do asset.
-        target_w, target_h = 1171, 141
+        # Grade nativa do SVG (sizeAt): a máscara mantém a resolução do asset.
+        target_w, target_h = int(renderer.defaultSize().width()), int(renderer.defaultSize().height())
         pixmap = QPixmap(target_w, target_h)
         pixmap.fill(QColor(0, 0, 0, 0))
         painter = QPainter(pixmap)
@@ -287,21 +293,22 @@ def panel_regions(rect: Rect) -> dict[str, tuple[int, int, int, int]]:
 
 
 # Vértices (x, y) absolutos da aba do botão fechar, em ordem para o hit-test de
-# polígono e para o QPainter. side 'left' = aba do painel esquerdo (borda interna na
-# direita do painel, ponta apontando à esquerda); 'right' = espelho horizontal no
-# painel direito. A forma é o path exato do SVG (8 vértices) escalado: a altura da
-# aba vem das frações TOP/BOTTOM da janela e a profundidade (largura) vem do
-# aspecto do SVG, pra manter a silhueta real do botão do jogo.
+# polígono e para o QPainter. side 'left' = aba do painel esquerdo (borda interna
+# original na direita do painel, ponta apontando à esquerda); 'right' = espelho
+# horizontal no painel direito. A forma é o path exato do SVG (8 vértices) escalado:
+# a altura da aba vem das frações TOP/BOTTOM da janela e a profundidade (largura) vem
+# do aspecto do SVG. A âncora horizontal usa CLOSE_TAB_ANCHOR_FRACTION_OF_HEIGHT
+# (borda original do painel) porque a aba do jogo não acompanha o alargamento da área.
 def close_tab_vertices(rect: Rect, side: str) -> list[tuple[float, float]]:
     top = rect.top + rect.height * CLOSE_TAB_TOP_FRACTION
     bottom = rect.top + rect.height * CLOSE_TAB_BOTTOM_FRACTION
     height = bottom - top
     depth = height * CLOSE_TAB_ASPECT
     if side == "left":
-        inner = rect.left + panel_width(rect)
+        inner = rect.left + rect.height * CLOSE_TAB_ANCHOR_FRACTION_OF_HEIGHT
         flip = -1.0  # a ponta da seta aponta para a esquerda (interior do painel esq.)
     else:
-        inner = rect.right - panel_width(rect)
+        inner = rect.right - rect.height * CLOSE_TAB_ANCHOR_FRACTION_OF_HEIGHT
         flip = 1.0
     return [
         (inner + flip * (_SVG_W - sx) / _SVG_W * depth, top + sy / _SVG_H * height)

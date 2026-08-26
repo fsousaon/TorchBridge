@@ -156,9 +156,10 @@ class GameOverlay(QWidget):
         self._radial_cache[key] = pixmap
         return pixmap
 
-    # Silhueta verde da HUD inferior renderizada do SVG (1171x141, proporção 1920x1080).
-    # Usada SÓ no modo de calibração para mostrar a mesma área que o hit-test considera
-    # "não fecha painéis". None se o asset não existir ou o Qt Svg falhar.
+    # Silhueta verde da HUD inferior renderizada do SVG (viewBox nativo do asset,
+    # proporção 1920x1080). Usada SÓ no modo de calibração para mostrar a mesma área que
+    # o hit-test considera "não fecha painéis". None se o asset não existir ou o Qt Svg
+    # falhar.
     def _load_hud_pixmap(self) -> QPixmap | None:
         path = hud_asset_path()
         if path is None or not path.exists():
@@ -167,7 +168,8 @@ class GameOverlay(QWidget):
             renderer = QSvgRenderer()
             if not renderer.load(str(path)):
                 return None
-            pixmap = QPixmap(1171, 141)
+            size = renderer.defaultSize()
+            pixmap = QPixmap(int(size.width()), int(size.height()))
             pixmap.fill(QColor(0, 0, 0, 0))
             painter = QPainter(pixmap)
             renderer.render(painter)
