@@ -303,38 +303,42 @@ class GameOverlay(QWidget):
     def _pet_icon(self, name: str) -> QPixmap | None:
         return self._radial_icon(name, False)
 
-    # Quatro quadradinhos da sublinha de pet actions, embaixo do nó de slot selecionado.
-    # Layout (escala da roda, referência 1080p): lado = 22px, vão entre eles = 10px, topo da
-    # fileira = 50px abaixo do centro do nó (o ícone ocupa ~33px, sobra ~17px de respiro).
-    # A fileira NÃO é centralizada: o 4º quadrado fica alinhado no eixo horizontal do nó
-    # (direto embaixo do ícone do slot P) — start_x é derivado pra que o centro do quadrado
-    # i=3 caia exatamente em point.x(). Cada quadrado desenha o ícone da ação correspondente
-    # (1=espada/agressivo, 2=escudo/defensivo, 3=pássaro/passivo, 4=moeda/vendedor) e o
-    # quadrado `selection` (1..4) recebe o marcador: borda mais grossa na cor dourada da
-    # roda selecionada (255, 202, 82).
+    # Quatro CÍRCULOS da sublinha de pet actions, embaixo do nó de slot selecionado.
+    # Layout (escala da roda, referência 1080p): diâmetro = 44px (dobro do quadrado
+    # antigo de 22px — pedido do usuário, ago/2026), vão entre eles = 20px, topo da
+    # fileira = 50px abaixo do centro do nó. A fileira NÃO é centralizada: o CÍRCULO
+    # 4 fica alinhado no eixo horizontal do nó (direto embaixo do ícone do slot P) —
+    # os centros ficam a 64px (diâmetro + vão) uns dos outros. Cada círculo desenha o
+    # ícone da ação correspondente (1=espada/agressivo, 2=escudo/defensivo,
+    # 3=pássaro/passivo, 4=moeda/vendedor) e o círculo `selection` (1..4) recebe o
+    # marcador: borda mais grossa na cor dourada da roda selecionada (255, 202, 82).
     def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float, selection: int | None) -> None:
-        side = 22 * scale
-        gap = 10 * scale
+        side = 44 * scale
+        gap = 20 * scale
         top = point.y() + 50 * scale
-        start_x = point.x() - (3 * (side + gap) + side / 2.0)
-        # O ícone (31x31) entra no quadrado (22px) com leve respiro: 78% do lado.
+        # Centro do 4º círculo no eixo do nó; os demais recuam de 64 em 64 (lado+vão).
+        center4_x = point.x()
+        center_y = top + side / 2.0
+        # O ícone (31x31) entra no círculo com leve respiro: 78% do diâmetro.
         icon_size = side * 0.78
         for i in range(4):
-            x = start_x + i * (side + gap)
+            cx = center4_x - (3 - i) * (side + gap)
             if selection is not None and i + 1 == selection:
-                # Marcador do quadrado ativo: dourado, igual à cor do nó selecionado da roda.
+                # Marcador do círculo ativo: dourado, igual à cor do nó selecionado da roda.
                 painter.setPen(QPen(QColor(255, 202, 82, 255), 3.0 * scale))
                 painter.setBrush(QColor(24, 28, 34, 235))
             else:
                 painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
                 painter.setBrush(QColor(216, 219, 224, 242))
-            painter.drawRect(QRectF(x, top, side, side))
-            # Ícone da ação centralizado no quadrado (fallback: sem PNG, só o quadrado).
+            painter.drawEllipse(QPointF(cx, center_y), side / 2.0, side / 2.0)
+            # Ícone da ação centralizado no círculo (fallback: sem PNG, só o círculo).
             pixmap = self._pet_icon(self.PET_SUBMENU_ICONS[i])
             if pixmap is not None:
-                ox = x + (side - icon_size) / 2.0
-                oy = top + (side - icon_size) / 2.0
-                painter.drawPixmap(QRectF(ox, oy, icon_size, icon_size), pixmap, QRectF(pixmap.rect()))
+                painter.drawPixmap(
+                    QRectF(cx - icon_size / 2.0, center_y - icon_size / 2.0, icon_size, icon_size),
+                    pixmap,
+                    QRectF(pixmap.rect()),
+                )
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
