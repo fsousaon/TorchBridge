@@ -31,19 +31,20 @@ img = overlay.grab()
 img.save("pet_submenu_open.png")
 
 # 2) Confere os pixels: P no setor 5 (ângulo -90 + 4*360/7 = 115,7°) → nó em
-# (960 + 126*cos, 540 + 126*sin) ≈ (905, 654). Fileira: topo y≈704, lado 22, vão 10,
-# largura total 118 centralizada no x do nó (~846..964).
+# (960 + 126*cos, 540 + 126*sin) ≈ (905, 654). Fileira: topo y≈704, lado 22, vão 10.
+# A fileira NÃO é centralizada: o centro do 4º quadrado cai em x=905 (eixo do nó),
+# então os centros ficam em 809, 841, 873 e 905 (vão de 32px entre centros).
 def sample(x, y):
     return img.toImage().pixelColor(x, y)
 
-# Centro do primeiro quadrado: (846.35 + 11, 703.55 + 11) ≈ (857, 715).
-c1 = sample(857, 715)
-# Centro do quarto quadrado: (964 - 11, 715) ≈ (953, 715).
-c4 = sample(953, 715)
-# Entre o 1º e o 2º (no vão 868..878, ~873, 715) NÃO pode ser quadrado.
-gap = sample(873, 715)
-# Bem acima da fileira (857, 690) não é quadrado.
-above = sample(857, 690)
+# Centro do primeiro quadrado: (905 - 3*32, 715) = (809, 715).
+c1 = sample(809, 715)
+# Centro do quarto quadrado: eixo do nó (905, 715).
+c4 = sample(905, 715)
+# Entre o 1º (termina em 820) e o 2º (começa em 830): ~825, 715 NÃO pode ser quadrado.
+gap = sample(825, 715)
+# Bem acima da fileira (809, 690) não é quadrado.
+above = sample(809, 690)
 
 print("1o quadrado:", c1.name(), "| 4o quadrado:", c4.name(),
       "| vão:", gap.name(), "| acima:", above.name())
@@ -56,7 +57,7 @@ assert gap.lightness() < c1.lightness() - 30, f"vão parece quadrado: {gap.name(
 shared.update(pet_submenu_open=False)
 img2 = overlay.grab()
 img2.save("pet_submenu_closed.png")
-off = img2.toImage().pixelColor(857, 715)
+off = img2.toImage().pixelColor(809, 715)
 print("com sublinha fechada no mesmo ponto:", off.name())
 assert off.lightness() < 150, f"sublinha 'fechada' ainda clara: {off.name()}"
 

@@ -295,13 +295,14 @@ class GameOverlay(QWidget):
     # Quatro quadradinhos cinza da sublinha de pet actions, embaixo do nó de slot selecionado.
     # Layout (escala da roda, referência 1080p): lado = 22px, vão entre eles = 10px, topo da
     # fileira = 50px abaixo do centro do nó (o ícone ocupa ~33px, sobra ~17px de respiro).
-    # Centralizada no eixo horizontal do nó.
+    # A fileira NÃO é centralizada: o 4º quadrado fica alinhado no eixo horizontal do nó
+    # (direto embaixo do ícone do slot P) — start_x é derivado pra que o centro do quadrado
+    # i=3 caia exatamente em point.x().
     def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float) -> None:
         side = 22 * scale
         gap = 10 * scale
         top = point.y() + 50 * scale
-        total = 4 * side + 3 * gap
-        start_x = point.x() - total / 2.0
+        start_x = point.x() - (3 * (side + gap) + side / 2.0)
         painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
         painter.setBrush(QColor(216, 219, 224, 242))
         for i in range(4):
