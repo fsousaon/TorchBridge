@@ -15,6 +15,7 @@ from torchbridge.models import (
     hud_target_rect,
     load_hud_mask,
     point_in_polygon,
+    pet_actions_target_rect,
     toggle_panel,
     panels_x_shift,
 )
@@ -243,6 +244,37 @@ class HudMaskGeometryTests(unittest.TestCase):
         self.assertFalse(hud_mask_hit(mask, rect, 458.958 + 10, 930.78 + 10))
         # Fora da região da HUD → False.
         self.assertFalse(hud_mask_hit(mask, rect, 960, 540))
+
+
+class PetActionsGeometryTests(unittest.TestCase):
+    # pet_actions_target_rect: caixinha 156x201 colada no canto superior esquerdo,
+    # escalando pela ALTURA da janela (156/1080, 201/1080).
+    def test_target_rect_1080p_corner(self):
+        rect = Rect(0, 0, 1920, 1080)
+        left, top, width, height = pet_actions_target_rect(rect)
+        self.assertAlmostEqual(width, 156.0 * 1.09, places=3)   # 179.4
+        self.assertAlmostEqual(height, 201.0 * 1.08, places=3)  # 231.15
+        # Canto colado: margem esquerda e de topo = 0.
+        self.assertAlmostEqual(left, 0.0, places=3)
+        self.assertAlmostEqual(top, 0.0, places=3)
+
+    # Janela deslocada: a caixinha acompanha o retângulo (não a origem da tela).
+    def test_target_rect_offset(self):
+        rect = Rect(100, 50, 1920, 1080)
+        left, top, width, height = pet_actions_target_rect(rect)
+        self.assertAlmostEqual(left, 100.0, places=3)
+        self.assertAlmostEqual(top, 50.0, places=3)
+        self.assertAlmostEqual(width, 156.0 * 1.09, places=3)
+        self.assertAlmostEqual(height, 201.0 * 1.08, places=3)
+
+    # Escala pela ALTURA: janela com metade da altura (540) → metade das dimensões.
+    def test_target_rect_scales_with_height(self):
+        rect = Rect(0, 0, 1280, 540)
+        left, top, width, height = pet_actions_target_rect(rect)
+        self.assertAlmostEqual(width, 156.0 * 1.09 / 2.0, places=3)   # 89.7
+        self.assertAlmostEqual(height, 201.0 * 1.08 / 2.0, places=3)  # 115.575
+        self.assertAlmostEqual(left, 0.0, places=3)
+        self.assertAlmostEqual(top, 0.0, places=3)
 
 
 class HudMaskAssetTests(unittest.TestCase):

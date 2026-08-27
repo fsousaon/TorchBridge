@@ -22,6 +22,8 @@ from .models import (
     hud_target_rect,
     panel_regions,
     panels_x_shift,
+    pet_actions_asset_path,
+    pet_actions_target_rect,
 )
 from .win32 import make_overlay_clickthrough
 
@@ -63,6 +65,9 @@ class GameOverlay(QWidget):
         # Silhueta verde da HUD (modo de calibração): renderizada uma vez do SVG, se existir.
         # None = asset ausente (nada a desenhar).
         self._hud_pixmap = self._load_hud_pixmap()
+        # Caixinha de pet actions (modo de calibração): referência visual no canto
+        # superior esquerdo, renderizada uma vez do SVG, se existir. None = ausente.
+        self._pet_actions_pixmap = self._load_pet_actions_pixmap()
         # Progresso da animação de entrada/saída do menu radial (0 = fechado, 1 = aberto).
         self._radial_progress = 0.0
         self._radial_last_time = time.monotonic()
@@ -176,6 +181,27 @@ class GameOverlay(QWidget):
             painter.end()
             return pixmap
         except Exception:  # noqa: BLE001 - sem Qt Svg o modo calibração segue sem a HUD.
+            return None
+
+    # Caixinha de pet actions renderizada do SVG (viewBox nativo 156x201). Usada SÓ no
+    # modo de calibração, como referência visual no canto superior esquerdo. None se o
+    # asset não existir ou o Qt Svg falhar.
+    def _load_pet_actions_pixmap(self) -> QPixmap | None:
+        path = pet_actions_asset_path()
+        if path is None or not path.exists():
+            return None
+        try:
+            renderer = QSvgRenderer()
+            if not renderer.load(str(path)):
+                return None
+            size = renderer.defaultSize()
+            pixmap = QPixmap(int(size.width()), int(size.height()))
+            pixmap.fill(QColor(0, 0, 0, 0))
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            return pixmap
+        except Exception:  # noqa: BLE001 - sem Qt Svg o modo calibração segue sem ela.
             return None
 
     # Roda central: emblema "Center" (assets) + um ícone por slot do perfil.
@@ -350,6 +376,20 @@ class GameOverlay(QWidget):
                 self._hud_pixmap,
             )
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        # Pet actions: a caixinha real do jogo (formas geométricas) no canto superior
+        # esquerdo — referência visual para ações futuras, ainda SEM hit-test. Roxa pra
+        # não confundir com as cores das outras zonas (verde=HUD, ciano= painel, laranja=fechar).
+        if self._pet_actions_pixmap is not None:
+            pl, pt, pw, ph = pet_actions_target_rect(rect)
+            pet_local = QRectF(pl - rect.left, pt - rect.top, pw, ph)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.setPen(QPen(QColor(196, 120, 255, 130), 1.0 * scale))
+            painter.setBrush(QColor(196, 120, 255, 34))
+            painter.drawPixmap(
+                int(pet_local.x()), int(pet_local.y()), int(pet_local.width()), int(pet_local.height()),
+                self._pet_actions_pixmap,
+            )
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         # Rótulos: o que cada zona faz (posicionados na bounding box da aba).
         painter.setFont(self._font(max(7, round(9 * scale)), True))
         painter.setPen(QColor(255, 159, 67, 245))
@@ -375,6 +415,23 @@ class GameOverlay(QWidget):
                 label_box,
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                 "HUD (NÃO FECHA)",
+            )
+        if self._pet_actions_pixmap is not None:
+            pl, pt, pw, ph = pet_actions_target_rect(rect)
+            pet_local = QRectF(pl - rect.left, pt - rect.top, pw, ph)
+            painter.setFont(self._font(max(7, round(9 * scale)), True))
+            painter.setPen(QColor(216, 156, 255, 235))
+            # A caixinha está colada ao canto: o rótulo fica à DIREITA dela, centralizado
+            # na vertical (não dá pra colocar acima/esquerda que não há espaço).
+            label_box = QRectF(
+                pet_local.right() + 6 * scale,
+                pet_local.top(),
+                120 * scale, pet_local.height(),
+            )
+            painter.drawText(
+                label_box,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                "PET ACTIONS",
             )
 
     # Mensagens temporárias (conectado, calibrado, perfil recarregado...).

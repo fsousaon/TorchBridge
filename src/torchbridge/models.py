@@ -250,6 +250,45 @@ def hud_asset_path() -> Path | None:
     return base / "assets" / "hud" / HUD_ASSET
 
 
+# Pet actions do jogo (caixinha com os botões de ação do pet) no CANTO SUPERIOR ESQUERDO
+# da janela do jogo. A forma vem do SVG assets/hud/Pet-actions.svg (viewBox 156x201,
+# desenhado na altura de REFERÊNCIA 1080). Usado SÓ no modo de calibração
+# (overlay.show_calibration) como referência visual para ações futuras — ainda SEM
+# hit-test/zona de clique.
+#
+# Mesma filosofia da HUD: largura E altura em FRAÇÃO DA ALTURA da janela, porque o jogo
+# escala a interface pela altura (não pela largura). Canto colado: margem esquerda e de
+# topo = 0. Ajuste fino (se um dia descolar): rode com show_calibration e veja o
+# quadrado roxo alinhado com a caixinha real do jogo.
+PET_ACTIONS_ASSET = "Pet-actions.svg"
+# Calibração ago/2026: SVG 156x201 ampliado +9% de largura e +8% de altura em
+# relação ao desenho — a caixinha real do jogo é um pouco maior que o SVG.
+PET_ACTIONS_WIDTH_FRACTION_OF_HEIGHT = 156.0 * 1.09 / 1080.0  # largura = fração da ALTURA
+PET_ACTIONS_HEIGHT_FRACTION = 201.0 * 1.08 / 1080.0          # altura = fração da ALTURA
+PET_ACTIONS_LEFT_FRACTION = 0.0                        # margem esquerda = 0 (colado ao canto)
+PET_ACTIONS_TOP_FRACTION = 0.0                         # margem de topo = 0 (colado ao topo)
+
+
+# Retângulo (x, y, w, h) em coordenadas absolutas da caixinha de pet actions, colada no
+# canto superior esquerdo da janela do jogo. Fonte única do desenho do modo de calibração
+# (overlay._draw_calibration).
+def pet_actions_target_rect(rect: Rect) -> tuple[float, float, float, float]:
+    width = rect.height * PET_ACTIONS_WIDTH_FRACTION_OF_HEIGHT
+    height = rect.height * PET_ACTIONS_HEIGHT_FRACTION
+    left = rect.left + rect.width * PET_ACTIONS_LEFT_FRACTION
+    top = rect.top + rect.height * PET_ACTIONS_TOP_FRACTION
+    return (left, top, width, height)
+
+
+# Caminho do asset do pet actions (mesma pasta da HUD).
+def pet_actions_asset_path() -> Path | None:
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parent.parent.parent
+    return base / "assets" / "hud" / PET_ACTIONS_ASSET
+
+
 # Botão de fechar (X) do painel: a forma que o JOGO hit-testa é uma aba com base
 # RETA na borda interna do painel e ponta em seta voltada para o interior do
 # painel (painel esquerdo aponta à esquerda; direito é o espelho). A forma exata
