@@ -107,6 +107,20 @@ def both_panels_open(active_panels: list[str]) -> bool:
     return bool(left and right)
 
 
+# Slot da roda que abre a sublinha de ações do pet: 4 quadradinhos cinza desenhados sob o
+# setor selecionado enquanto a roda está aberta e o pet é o setor ativo (toggle no d-pad).
+PET_ACTIONS_SLOT = "P"
+
+
+# A sublinha de pet actions está visível no overlay? Só quando a roda está aberta, o setor
+# selecionado é o slot de pet (PET_ACTIONS_SLOT) e o toggle interno está ligado.
+# Fonte única consultada pelo engine (ao publicar o snapshot) e pelo overlay (ao desenhar).
+def pet_submenu_open(radial_active: bool, selection: int | None, slot: object, open_flag: bool) -> bool:
+    if not radial_active or not open_flag or selection is None:
+        return False
+    return isinstance(slot, str) and slot.strip().upper() == PET_ACTIONS_SLOT
+
+
 # Largura do painel do jogo medida na própria janela: ela escala com a ALTURA da janela,
 # não com a largura — o jogo mantém a interface sem distorção em qualquer proporção de
 # tela. Base 7/15 + 20px a mais por painel em 1080p (20/1080) para a área útil do painel.
@@ -411,6 +425,8 @@ class OverlaySnapshot:
     mode: str = "direct"
     radial_active: bool = False
     radial_selection: int | None = None
+    # Sublinha de pet actions (4 quadradinhos) visível sob o slot 'P' da roda.
+    pet_submenu_open: bool = False
     # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
     active_panels: list[str] = field(default_factory=lambda: ["", ""])
     aim_x: int | None = None

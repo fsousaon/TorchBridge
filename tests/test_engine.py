@@ -15,6 +15,7 @@ class FakeInjector:
         self.moved: list[tuple[int, int]] = []
         self.cursor = (100, 100)
         self.buttons: dict[str, bool] = {}
+        self.tapped: list[str] = []
 
     def move(self, x: int, y: int) -> bool:
         self.moved.append((x, y))
@@ -29,6 +30,10 @@ class FakeInjector:
 
     def mouse_button(self, button: str, down: bool) -> bool:
         self.buttons[button] = down
+        return True
+
+    def tap(self, name: str) -> bool:
+        self.tapped.append(name)
         return True
 
 
@@ -394,3 +399,146 @@ class HudClickPanelResetTests(unittest.TestCase):
             engine, _, _ = self._make_engine(directory, cursor=(960, 540))
             self._tick(engine)
             self.assertEqual(engine._active_panels, ["", ""])
+
+
+class PetSubmenuTests(unittest.TestCase):
+    # Sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad BAIXO abre, CIMA fecha,
+    # e o d-pad inteiro deixa de disparar toques de tecla enquanto a roda (LB) está aberta.
+    # Slots do perfil: ["I", "S", "Q", "J", "P", "C", "A"] — setor 5 = P, setor 6 = C.
+    # Vetores que resolvem em cada setor (radial_slot: atan2(rx, -ry) a partir do topo):
+    #   P (centro 205,7°): rx=-0.6, ry=0.8  → 216,9° → setor 5
+    #   C (centro 257,1°): rx=-0.9, ry=0.2  → 257,4° → setor 6
+
+    @staticmethod
+    def _state(buttons: tuple[str, ...] = (), **kw) -> ControllerState:
+        return ControllerState(connected=True, buttons=frozenset(buttons), **kw)
+
+    def _engine(self, directory: str):
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        engine.injector = FakeInjector()
+        return engine, shared
+
+    def _tick(self, engine: BridgeEngine, directory: str, state: ControllerState) -> None:
+        cfg = engine.config.get()
+        rect = Rect(0, 0, 1920, 1080)
+        engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+        # O loop real (run()) registra o estado do tick em _previous no fim de cada ciclo;
+        # aqui fazemos o mesmo para as bordas (subida/descida) funcionarem nos ticks seguintes.
+        engine._previous = state
+
+    # Roda aberta no setor P + d-pad BAIXO na borda: a sublinha abre e publica True.
+    def test_dpad_down_on_pet_opens_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            snap = shared.get()
+            self.assertEqual(snap.radial_selection, 5)
+            self.assertTrue(snap.pet_submenu_open)
+
+    # Com a sublinha aberta, d-pad BAIXO não dispara o binding de tecla (7): o d-pad é da sublinha.
+    def test_dpad_down_suppressed_tap_when_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertNotIn("7", engine.injector.tapped)
+
+    # Sem roda aberta o d-pad continua disparando a tecla configurada (comportamento antigo).
+    def test_dpad_tap_still_works_without_wheel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._tick(engine, directory, self._state(("dpad_down",)))
+            self.assertIn("7", engine.injector.tapped)
+
+    # Com a roda aberta em OUTRO setor (C = 6), d-pad BAIXO NÃO abre a sublinha do pet.
+    def test_dpad_down_on_other_sector_does_not_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.9, ry=0.2))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.9, ry=0.2))
+            self.assertEqual(shared.get().radial_selection, 6)
+            self.assertFalse(shared.get().pet_submenu_open)
+            # E o toque de tecla do d-pad continua suprimido com a roda aberta.
+            self.assertNotIn("7", engine.injector.tapped)
+
+    # D-pad CIMA na borda fecha a sublinha aberta.
+    def test_dpad_up_closes_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            self._tick(engine, directory, self._state(("lb", "dpad_up"), rx=-0.6, ry=0.8))
+            self.assertFalse(shared.get().pet_submenu_open)
+
+    # Segurar o d-pad (sem nova borda) não reabre: o toggle só responde a toques.
+    def test_held_dpad_does_not_retrigger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            # Segue segurando baixo nos ticks seguintes: nada muda.
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+
+    # Desmarcar o setor P (girar para C) esconde a sublinha sozinha.
+    def test_deselecting_pet_hides_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            # Gira para o setor C (índice 6): a sublinha some.
+            self._tick(engine, directory, self._state(("lb",), rx=-0.9, ry=0.2))
+            self.assertEqual(shared.get().radial_selection, 6)
+            self.assertFalse(shared.get().pet_submenu_open)
+
+    # Soltar LB (confirma o slot P) esconde a sublinha: roda fechada = sublinha inexistente.
+    def test_releasing_lb_hides_submenu_and_confirms_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            # Solta LB no setor P: dispara o atalho 'P' e esconde a sublinha.
+            self._tick(engine, directory, self._state(rx=-0.6, ry=0.8))
+            self.assertIn("P", engine.injector.tapped)
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertFalse(shared.get().radial_active)
+
+    # Reabrir a roda no P depois de fechada: a sublinha começa FECHADA (nada gruda).
+    def test_reopening_pet_starts_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(rx=-0.6, ry=0.8))  # fecha a roda
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))  # reabre no P
+            self.assertEqual(shared.get().radial_selection, 5)
+            self.assertFalse(shared.get().pet_submenu_open)
+
+    # Pausa/interrupção (_release_all) zera a sublinha aberta.
+    def test_release_all_closes_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            engine._release_all()
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertFalse(engine._pet_submenu)
+
+    # Roda aberta sem seleção (stick no centro): d-pad não abre nada e não dispara teclas.
+    def test_no_selection_no_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb", "dpad_down")))
+            self.assertIsNone(shared.get().radial_selection)
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertNotIn("7", engine.injector.tapped)

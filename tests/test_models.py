@@ -16,6 +16,7 @@ from torchbridge.models import (
     load_hud_mask,
     point_in_polygon,
     pet_actions_target_rect,
+    pet_submenu_open,
     toggle_panel,
     panels_x_shift,
 )
@@ -275,6 +276,29 @@ class PetActionsGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(height, 201.0 * 1.08 / 2.0, places=3)  # 115.575
         self.assertAlmostEqual(left, 0.0, places=3)
         self.assertAlmostEqual(top, 0.0, places=3)
+
+
+class PetActionsSlotTests(unittest.TestCase):
+    # pet_submenu_open: a sublinha de pet actions só está visível com a roda ABERTA,
+    # o setor selecionado sendo o slot de pet E o toggle interno ligado.
+    def test_open_when_wheel_pet_and_flag(self):
+        self.assertTrue(pet_submenu_open(True, 5, "P", True))
+
+    def test_closed_when_wheel_closed(self):
+        self.assertFalse(pet_submenu_open(False, 5, "P", True))
+
+    def test_closed_when_sector_is_not_pet(self):
+        self.assertFalse(pet_submenu_open(True, 5, "I", True))
+
+    def test_closed_when_toggle_off(self):
+        self.assertFalse(pet_submenu_open(True, 5, "P", False))
+
+    def test_closed_when_no_selection(self):
+        self.assertFalse(pet_submenu_open(True, None, "P", True))
+
+    # Slot vem do perfil: tolera maiúscula/minuscula e espaços.
+    def test_slot_case_and_spaces(self):
+        self.assertTrue(pet_submenu_open(True, 5, " p ", True))
 
 
 class HudMaskAssetTests(unittest.TestCase):

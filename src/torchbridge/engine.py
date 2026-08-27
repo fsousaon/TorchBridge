@@ -18,6 +18,7 @@ from .models import (
     click_zone,
     load_hud_mask,
     panels_x_shift,
+    pet_submenu_open,
     toggle_panel,
 )
 from .win32 import (
@@ -70,6 +71,10 @@ class BridgeEngine(threading.Thread):
         # Estado do combo Back+Start (calibração): visto?, desde quando?, já disparou?
         # Setor da roda selecionado enquanto LB estiver segurado.
         self._radial_selection: int | None = None
+        # Toggle interno da sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad
+        # para BAIXO abre, para CIMA fecha. Desmarca o setor 'P' ou fecha a roda: a sublinha
+        # some automaticamente (estado interno volta a False).
+        self._pet_submenu: bool = False
         # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
         self._active_panels: list[str] = ["", ""]
         self._center_combo_seen = False
@@ -151,9 +156,12 @@ class BridgeEngine(threading.Thread):
         self._held_mouse.clear()
         # Interrompe o "movimento direto ativo" para o retorno ao centro não disparar no tick de volta.
         self._direct_move_active = False
+        # A roda fechou (interrupção): a sublinha de pet actions não pode sobreviver aberta.
+        self._pet_submenu = False
         self.shared.update(
             radial_active=False,
             radial_selection=None,
+            pet_submenu_open=False,
             aim_x=None,
             aim_y=None,
         )
@@ -245,11 +253,15 @@ class BridgeEngine(threading.Thread):
             self._center_combo_triggered = False
 
     # Botões de ação (face, direcional, R3): toque único na borda de subida.
+    # Com a roda de atalhos ABERTA (LB segurado) o d-pad inteiro fica sobrecarregado:
+    # ele controla a sublinha de pet actions (up/down) e NÃO dispara mais os toques de
+    # tecla configurados (o usuário está na roda, não no jogo).
     def _handle_discrete_bindings(
         self,
         state: ControllerState,
         bindings: dict[str, Any],
     ) -> None:
+        radial_open = state.pressed("lb")
         for button in (
             "a",
             "b",
@@ -261,6 +273,9 @@ class BridgeEngine(threading.Thread):
             "dpad_left",
             "r3",
         ):
+            # Roda aberta: o d-pad é da sublinha de pet, não do jogo — pula o toque.
+            if radial_open and button.startswith("dpad_"):
+                continue
             # Borda de subida: um toque por pressionamento, sem auto-repeat.
             if state.pressed(button) and not self._previous.pressed(button):
                 self._tap_binding(bindings.get(button))
@@ -280,6 +295,29 @@ class BridgeEngine(threading.Thread):
         if active and selection is not None and selection != self._radial_selection:
             self._radial_selection = selection
             hub.rumble(0.04, 0.10, 35)
+        # Sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad PARA BAIXO abre,
+        # para CIMA fecha — enquanto a roda está aberta e o setor do pet é o selecionado.
+        # Vibra só na transição real (abriu ou fechou).
+        if active and selection is not None:
+            current_slot = slots[selection - 1] if 1 <= selection <= len(slots) else ""
+            if pet_submenu_open(active, selection, current_slot, True):
+                # Setor do pet selecionado: o d-pad vertical é da sublinha (os toques de
+                # tecla já são suprimidos em _handle_discrete_bindings pelo LB segurado).
+                if state.pressed("dpad_down") and not self._previous.pressed("dpad_down"):
+                    if not self._pet_submenu:
+                        self._pet_submenu = True
+                        hub.rumble(0.04, 0.10, 35)
+                elif state.pressed("dpad_up") and not self._previous.pressed("dpad_up"):
+                    if self._pet_submenu:
+                        self._pet_submenu = False
+                        hub.rumble(0.04, 0.10, 35)
+            # Setor desmarcado do pet: a sublinha se esconde sozinha (estado interno volta
+            # a False — o próximo 'P' começa fechado).
+            elif self._pet_submenu:
+                self._pet_submenu = False
+        else:
+            # Roda fechada: a sublinha não existe mais.
+            self._pet_submenu = False
 
         # LB liberado: confirma a escolha — dispara o slot selecionado, se mapeado.
         if self._previous.pressed("lb") and not active:
@@ -297,6 +335,14 @@ class BridgeEngine(threading.Thread):
         self.shared.update(
             radial_active=active,
             radial_selection=self._radial_selection if active else None,
+            pet_submenu_open=pet_submenu_open(
+                active,
+                self._radial_selection if active else None,
+                slots[self._radial_selection - 1]
+                if self._radial_selection is not None and 1 <= self._radial_selection <= len(slots)
+                else "",
+                self._pet_submenu,
+            ),
         )
 
     # Posiciona o cursor do Windows a partir dos analógicos (movimento direto ou cursor).

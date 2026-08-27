@@ -249,6 +249,7 @@ class GameOverlay(QWidget):
             )
 
         # Ícones a partir do topo, no sentido horário — mesmo layout da função radial_slot.
+        selected_point: QPointF | None = None
         for index in range(len(radial_slots)):
             angle = math.radians(-90 + index * (360 / len(radial_slots)))
             point = QPointF(
@@ -257,6 +258,8 @@ class GameOverlay(QWidget):
             )
             # Slot marcado pelo análogo troca para a arte "-ativo".
             selected = snapshot.radial_selection == index + 1
+            if selected:
+                selected_point = point
             icon = self._radial_icon(str(radial_slots[index]).upper(), selected)
             if icon is not None:
                 width = int(80 * scale)
@@ -280,8 +283,30 @@ class GameOverlay(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     str(radial_slots[index]),
                 )
+        # Sublinha de pet actions: 4 quadradinhos cinza sob o nó do slot 'P', centralizados
+        # no eixo dele. Visível quando snapshot.pet_submenu_open (roda aberta + pet
+        # selecionado + d-pad baixo). Desenhado dentro do save/restore, então herda a
+        # opacidade/escala da animação de entrada/saída da roda.
+        if snapshot.pet_submenu_open and selected_point is not None:
+            self._draw_pet_submenu(painter, selected_point, scale)
         # Devolve transformações de estado (opacidade/translate/scale) ao desenhista.
         painter.restore()
+
+    # Quatro quadradinhos cinza da sublinha de pet actions, embaixo do nó de slot selecionado.
+    # Layout (escala da roda, referência 1080p): lado = 22px, vão entre eles = 10px, topo da
+    # fileira = 50px abaixo do centro do nó (o ícone ocupa ~33px, sobra ~17px de respiro).
+    # Centralizada no eixo horizontal do nó.
+    def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float) -> None:
+        side = 22 * scale
+        gap = 10 * scale
+        top = point.y() + 50 * scale
+        total = 4 * side + 3 * gap
+        start_x = point.x() - total / 2.0
+        painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
+        painter.setBrush(QColor(216, 219, 224, 242))
+        for i in range(4):
+            x = start_x + i * (side + gap)
+            painter.drawRect(QRectF(x, top, side, side))
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
