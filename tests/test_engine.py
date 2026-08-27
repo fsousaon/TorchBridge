@@ -544,6 +544,37 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertFalse(shared.get().radial_active)
             self.assertNotIn("1", engine.injector.tapped)
 
+    # A com a sublinha aberta E painel ESQUERDO aberto: dispara a letra do painel (fecha
+    # no jogo) e zera o índice 0, sem disparar o atalho do P.
+    def test_a_with_submenu_closes_open_left_panel_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            # Painel esquerdo (C) está aberto antes da confirmação.
+            engine._active_panels = ["C", ""]
+            shared.update(active_panels=["C", ""])
+            self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8))
+            # A letra do painel esquerdo foi disparada (fecha o painel no jogo).
+            self.assertIn("C", engine.injector.tapped)
+            self.assertNotIn("P", engine.injector.tapped)
+            self.assertEqual(engine._active_panels[0], "")
+            self.assertEqual(shared.get().active_panels[0], "")
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertFalse(shared.get().radial_active)
+
+    # A com a sublinha aberta E painel esquerdo FECHADO: nenhum toque extra, só fecha tudo.
+    def test_a_with_submenu_no_left_panel_no_extra_tap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertEqual(engine._active_panels, ["", ""])
+            self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8))
+            # Só o A confirmou; nada extra foi disparado.
+            self.assertEqual(engine.injector.tapped, [])
+            self.assertEqual(engine._active_panels, ["", ""])
+
     # A com a roda aberta NÃO dispara a tecla padrão do A ("1"): o toque é da confirmação.
     def test_a_key_tap_suppressed_when_wheel_open(self):
         with tempfile.TemporaryDirectory() as directory:

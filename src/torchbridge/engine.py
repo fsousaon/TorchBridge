@@ -382,6 +382,15 @@ class BridgeEngine(threading.Thread):
                 if next_panels != self._active_panels:
                     self._active_panels = next_panels
                     self.shared.update(active_panels=list(next_panels))
+            else:
+                # Sublinha do pet aberta: se o painel ESQUERDO (índice 0) está aberto,
+                # dispara a letra dele ANTES de fechar tudo — a tecla repetida fecha o
+                # painel no jogo (mesma regra do toggle_panel), deixando o cenário limpo
+                # para a próxima fase (ações reais do pet).
+                if self._active_panels[0]:
+                    self._tap_binding(self._active_panels[0])
+                    self._active_panels[0] = ""
+                    self.shared.update(active_panels=list(self._active_panels))
             self._pet_submenu = False
             self._pet_submenu_selection = PET_SUBMENU_DEFAULT
             self._radial_selection = None
