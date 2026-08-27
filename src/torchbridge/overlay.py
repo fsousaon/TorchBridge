@@ -74,6 +74,16 @@ class GameOverlay(QWidget):
         self._radial_last_time = time.monotonic()
         # Duração da animação do radial em cada direção (aparecer e sumir).
         self._radial_anim_seconds = 0.2
+        # Progresso da animação da sublinha de pet (0 = escondida atrás do nó, 1 = no lugar).
+        # As bolinhas deslizam de trás do ícone da opção P para baixo da fileira.
+        self._pet_submenu_progress = 0.0
+        self._pet_submenu_last_time = time.monotonic()
+        self._pet_submenu_anim_seconds = 0.2
+        # Último nó P e marcador com a sublinha ABERTA — guardados para a animação de
+        # SAÍDA: no tick em que a sublinha fecha, o snapshot já zera pet_submenu_open e
+        # a seleção, então sem esses backups a saída não teria onde partir.
+        self._last_pet_point: QPointF | None = None
+        self._last_pet_selection: int | None = None
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         # Redesenho a cada 16 ms (~60 FPS); o motor publica o estado a 120 Hz.
@@ -103,11 +113,30 @@ class GameOverlay(QWidget):
         else:
             self._radial_progress = max(target, self._radial_progress - step)
 
+    # Avança o progresso da sublinha de pet em direção ao alvo (1 aberta / 0 fechada).
+    # Mesma mecânica da roda: dt real entre ticks, duração exata em qualquer taxa.
+    def _tick_pet_submenu_anim(self, snapshot: OverlaySnapshot) -> None:
+        target = 1.0 if snapshot.pet_submenu_open else 0.0
+        now = time.monotonic()
+        dt = now - self._pet_submenu_last_time
+        self._pet_submenu_last_time = now
+        if abs(self._pet_submenu_progress - target) < 1e-3:
+            self._pet_submenu_progress = target
+            return
+        step = dt / self._pet_submenu_anim_seconds
+        if target > self._pet_submenu_progress:
+            self._pet_submenu_progress = min(target, self._pet_submenu_progress + step)
+        else:
+            self._pet_submenu_progress = max(target, self._pet_submenu_progress - step)
+
     # Acompanha o retângulo do jogo e mostra/esconde conforme o estado.
     def _refresh(self) -> None:
         snapshot = self.shared.get()
-        # A animação do radial avança pelo tempo real do tick, independente de visibilidade.
+        # As animações avançam pelo tempo real do tick, independente de visibilidade.
+        # A da sublinha é CHAMADA DIRETO AQUI (não dentro da da roda): o atalho de
+        # "chegou ao alvo" do radial faz return cedo e congelaria a da sublinha.
         self._tick_radial_anim(snapshot)
+        self._tick_pet_submenu_anim(snapshot)
         rect = snapshot.game_rect
         # Só desenha com overlay habilitado, jogo presente e janela válida.
         should_show = snapshot.enabled and snapshot.game_found and rect.valid
@@ -286,10 +315,27 @@ class GameOverlay(QWidget):
                 )
         # Sublinha de pet actions: 4 quadradinhos cinza sob o nó do slot 'P', o 4º alinhado
         # no eixo do nó. Visível quando snapshot.pet_submenu_open (roda aberta + pet
-        # selecionado + d-pad baixo). O quadrado marcado fica dourado. Desenhado dentro do
-        # save/restore, então herda a opacidade/escala da animação de entrada/saída da roda.
+        # selecionado + d-pad baixo). O quadrado marcado fica dourado. Desenhada com a
+        # animação de entrada/saída própria: as bolinhas deslizam de TRÁS do ícone da
+        # opção P para baixo da fileira (e voltam ao fechar), com fade e cascata.
+        pet_progress = self._pet_submenu_progress
         if snapshot.pet_submenu_open and selected_point is not None:
-            self._draw_pet_submenu(painter, selected_point, scale, snapshot.pet_submenu_selection)
+            # Sublinha aberta: atualiza os backups (nó P atual + marcador) — eles
+            # sustentam a animação de saída no tick em que o snapshot zerar tudo.
+            self._last_pet_point = selected_point
+            self._last_pet_selection = snapshot.pet_submenu_selection
+        elif not (self._last_pet_point is not None and progress > 0.0):
+            # Nem aberta, nem com roda de pé para a saída: zera (e apaga o backup,
+            # para uma roda NOVA não herdar a sublinha de uma sessão anterior).
+            pet_progress = 0.0
+            self._last_pet_point = None
+            self._last_pet_selection = None
+        # `progress` é o da roda: a sublinha só desenha com a roda de pé. A saída
+        # segue no último nó guardado até o progresso zerar.
+        if pet_progress > 0.0 and self._last_pet_point is not None:
+            self._draw_pet_submenu(
+                painter, self._last_pet_point, scale, self._last_pet_selection, pet_progress
+            )
         # Devolve transformações de estado (opacidade/translate/scale) ao desenhista.
         painter.restore()
 
@@ -312,7 +358,27 @@ class GameOverlay(QWidget):
     # ícone da ação correspondente (1=espada/agressivo, 2=escudo/defensivo,
     # 3=pássaro/passivo, 4=moeda/vendedor) e o círculo `selection` (1..4) recebe o
     # marcador: borda mais grossa na cor dourada da roda selecionada (255, 202, 82).
-    def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float, selection: int | None) -> None:
+    # Animação de entrada/saída (`progress` 0→1): as bolinhas nascem ESCONDIDAS ATRÁS
+    # do ícone da opção P (clip na base do ícone) e deslizam para baixo da fileira,
+    # com fade e cascata — a 4ª (debaixo do nó) sai primeiro, a 1ª por último. Ao
+    # fechar, o mesmo caminho em reverso: voltam para trás do ícone e somem.
+    PET_SUBMENU_STAGGER = 0.12  # atraso do fade/slide de cada bolinha relativa à anterior
+    # Distância do slide (em 1080p, sem escala): do lugar final até TOTALMENTE atrás do
+    # ícone P. O clip começa 44px abaixo do centro do nó (logo sob a base do ícone);
+    # para a bolinha (raio 22) começar INVISÍVEL, seu fundo (cy+22) tem de ficar acima
+    # do clip → slide >= 726 - (698 - 22) ≈ 50. Usamos 78: folga de 28px, zero vazamento.
+    PET_SUBMENU_SLIDE = 78.0
+
+    def _draw_pet_submenu(
+        self,
+        painter: QPainter,
+        point: QPointF,
+        scale: float,
+        selection: int | None,
+        progress: float,
+    ) -> None:
+        if progress <= 0.0:
+            return
         side = 44 * scale
         gap = 20 * scale
         top = point.y() + 50 * scale
@@ -321,8 +387,28 @@ class GameOverlay(QWidget):
         center_y = top + side / 2.0
         # O ícone (31x31) entra no círculo com leve respiro: 78% do diâmetro.
         icon_size = side * 0.78
+        # Clip: a sublinha só é visível ABAIXO da base do ícone da opção P — é assim que
+        # as bolinhas "saiam de trás da opção". O ícone P desenha com ~66px de altura
+        # (86x71 em 80px de largura), então 44px abaixo do centro fica folga de sobra
+        # por baixo dele e segura a sublinha toda (fileira termina a 72px abaixo).
+        clip_top = point.y() + 44 * scale
+        clip_bottom = top + side + 8 * scale
+        painter.save()
+        painter.setClipRect(QRectF(point.x() - 220 * scale, clip_top, 440 * scale, clip_bottom - clip_top))
+        base_opacity = painter.opacity()
+        stagger = self.PET_SUBMENU_STAGGER
+        span = 1.0 - stagger * 3  # janela de cada bolinha (a 1ª tem o maior atraso)
         for i in range(4):
+            # Cascata: a 4ª bolinha (i=3, debaixo do nó) começa primeiro; a 1ª (i=0)
+            # termina exatamente em progress=1. O slide desloca cada círculo PET_SUBMENU_SLIDE
+            # px para cima do lugar final: no 0 ela está atrás do ícone, escondida pelo clip.
+            raw = (progress - stagger * (3 - i)) / span
+            p_i = max(0.0, min(1.0, raw))
+            eased = p_i * p_i * (3.0 - 2.0 * p_i)
+            cy = center_y - self.PET_SUBMENU_SLIDE * scale * (1.0 - eased)
             cx = center4_x - (3 - i) * (side + gap)
+            # Fade individual por cima da opacidade herdada da roda.
+            painter.setOpacity(base_opacity * (0.2 + 0.8 * eased))
             if selection is not None and i + 1 == selection:
                 # Marcador do círculo ativo: dourado, igual à cor do nó selecionado da roda.
                 painter.setPen(QPen(QColor(255, 202, 82, 255), 3.0 * scale))
@@ -330,15 +416,18 @@ class GameOverlay(QWidget):
             else:
                 painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
                 painter.setBrush(QColor(216, 219, 224, 242))
-            painter.drawEllipse(QPointF(cx, center_y), side / 2.0, side / 2.0)
+            painter.drawEllipse(QPointF(cx, cy), side / 2.0, side / 2.0)
             # Ícone da ação centralizado no círculo (fallback: sem PNG, só o círculo).
             pixmap = self._pet_icon(self.PET_SUBMENU_ICONS[i])
             if pixmap is not None:
                 painter.drawPixmap(
-                    QRectF(cx - icon_size / 2.0, center_y - icon_size / 2.0, icon_size, icon_size),
+                    QRectF(cx - icon_size / 2.0, cy - icon_size / 2.0, icon_size, icon_size),
                     pixmap,
                     QRectF(pixmap.rect()),
                 )
+        # Devolve opacidade/clip antes de fechar o painter.
+        painter.setOpacity(base_opacity)
+        painter.restore()
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
