@@ -546,6 +546,64 @@ class PetSubmenuTests(unittest.TestCase):
             self._tick(engine, directory, self._state(("lb", "dpad_up"), rx=0.0, ry=0.0))
             self.assertFalse(shared.get().pet_submenu_open)
 
+    # Ao abrir, o marcador nasce no quadrado 4 (default, embaixo do ícone P).
+    def test_marker_starts_on_square_4(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            self.assertEqual(shared.get().pet_submenu_selection, 4)
+
+    # D-pad DIRITO anda 1 quadrado à direita com wrap: 4 → 1 → 2.
+    def test_dpad_right_moves_marker_with_wrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            # Do 4º, direita dá a volta e cai no 1º. Toque = borda: pressiona e solta.
+            self._tick(engine, directory, self._state(("lb", "dpad_right"), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self.assertEqual(shared.get().pet_submenu_selection, 1)
+            self._tick(engine, directory, self._state(("lb", "dpad_right"), rx=-0.6, ry=0.8))
+            self.assertEqual(shared.get().pet_submenu_selection, 2)
+
+    # D-pad ESQUERDO anda 1 quadrado à esquerda com wrap: 4 → 3 → 2 → 1 → 4.
+    def test_dpad_left_moves_marker_with_wrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            for expected in (3, 2, 1, 4):
+                self._tick(engine, directory, self._state(("lb", "dpad_left"), rx=-0.6, ry=0.8))
+                self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+                self.assertEqual(shared.get().pet_submenu_selection, expected)
+
+    # Sublinha FECHADA: d-pad ESQUERDO/DIRITO NÃO move marcador (None) e também não
+    # dispara as teclas 6/8 (roda aberta suprime o d-pad inteiro).
+    def test_dpad_horizontal_no_effect_when_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_right"), rx=-0.6, ry=0.8))
+            self.assertIsNone(shared.get().pet_submenu_selection)
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertNotIn("6", engine.injector.tapped)
+            self.assertNotIn("8", engine.injector.tapped)
+
+    # Fechar (d-pad cima) e reabrir: o marcador volta pro 4, não gruda onde parou.
+    def test_reopen_resets_marker_to_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_right"), rx=-0.6, ry=0.8))
+            self.assertEqual(shared.get().pet_submenu_selection, 1)
+            self._tick(engine, directory, self._state(("lb", "dpad_up"), rx=-0.6, ry=0.8))
+            self.assertIsNone(shared.get().pet_submenu_selection)
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertEqual(shared.get().pet_submenu_selection, 4)
+
     # Pausa/interrupção (_release_all) zera a sublinha aberta.
     def test_release_all_closes_submenu(self):
         with tempfile.TemporaryDirectory() as directory:

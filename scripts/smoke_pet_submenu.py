@@ -20,11 +20,12 @@ cfg.reload()
 overlay = GameOverlay(shared, cfg)
 overlay.resize(1920, 1080)
 
-# 1) Roda aberta no slot P (seleção 5) com a sublinha ligada.
+# 1) Roda aberta no slot P (seleção 5) com a sublinha ligada e marcador no 4º.
 shared.update(
     enabled=True, game_found=True, game_active=True,
     game_rect=Rect(0, 0, 1920, 1080), radial_active=True, radial_selection=5,
-    pet_submenu_open=True, aim_x=None, aim_y=None,
+    pet_submenu_open=True, pet_submenu_selection=4,
+    aim_x=None, aim_y=None,
 )
 overlay._radial_progress = 1.0
 img = overlay.grab()
@@ -52,9 +53,20 @@ print("1o quadrado:", c1.name(), "| 4o quadrado:", c4.name(),
 assert c1.lightness() > 150, f"1o quadrado não é claro o bastante: {c1.name()}"
 assert c4.lightness() > 150, f"4o quadrado não é claro o bastante: {c4.name()}"
 assert gap.lightness() < c1.lightness() - 30, f"vão parece quadrado: {gap.name()}"
+# Marcador: o 4º quadrado tem borda dourada (255,202,82) e o 1º NÃO tem —
+# confere a borda de cada um (tope do quadrado, y = 704 + 1).
+def border(x, y):
+    c = img.toImage().pixelColor(x, y)
+    return c.red(), c.green(), c.blue()
+
+b4 = border(905, 705)  # topo do 4º quadrado (marcado)
+b1 = border(809, 705)  # topo do 1º quadrado (não marcado)
+print("borda 4o (marcada):", b4, "| borda 1o:", b1)
+assert b4[0] > 200 and b4[1] > 150 and b4[2] < 130, f"borda marcada não é dourada: {b4}"
+assert b1[2] >= 130 or b1[0] <= 200, f"1o quadrado com borda dourada por engano: {b1}"
 
 # 3) Sublinha desligada (d-pad cima): os pixels viram fundo/roda de novo.
-shared.update(pet_submenu_open=False)
+shared.update(pet_submenu_open=False, pet_submenu_selection=None)
 img2 = overlay.grab()
 img2.save("pet_submenu_closed.png")
 off = img2.toImage().pixelColor(809, 715)

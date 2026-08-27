@@ -283,12 +283,12 @@ class GameOverlay(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     str(radial_slots[index]),
                 )
-        # Sublinha de pet actions: 4 quadradinhos cinza sob o nó do slot 'P', centralizados
-        # no eixo dele. Visível quando snapshot.pet_submenu_open (roda aberta + pet
-        # selecionado + d-pad baixo). Desenhado dentro do save/restore, então herda a
-        # opacidade/escala da animação de entrada/saída da roda.
+        # Sublinha de pet actions: 4 quadradinhos cinza sob o nó do slot 'P', o 4º alinhado
+        # no eixo do nó. Visível quando snapshot.pet_submenu_open (roda aberta + pet
+        # selecionado + d-pad baixo). O quadrado marcado fica dourado. Desenhado dentro do
+        # save/restore, então herda a opacidade/escala da animação de entrada/saída da roda.
         if snapshot.pet_submenu_open and selected_point is not None:
-            self._draw_pet_submenu(painter, selected_point, scale)
+            self._draw_pet_submenu(painter, selected_point, scale, snapshot.pet_submenu_selection)
         # Devolve transformações de estado (opacidade/translate/scale) ao desenhista.
         painter.restore()
 
@@ -297,16 +297,22 @@ class GameOverlay(QWidget):
     # fileira = 50px abaixo do centro do nó (o ícone ocupa ~33px, sobra ~17px de respiro).
     # A fileira NÃO é centralizada: o 4º quadrado fica alinhado no eixo horizontal do nó
     # (direto embaixo do ícone do slot P) — start_x é derivado pra que o centro do quadrado
-    # i=3 caia exatamente em point.x().
-    def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float) -> None:
+    # i=3 caia exatamente em point.x(). O quadrado `selection` (1..4) recebe o marcador:
+    # borda mais grossa na cor dourada da roda selecionada (255, 202, 82).
+    def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float, selection: int | None) -> None:
         side = 22 * scale
         gap = 10 * scale
         top = point.y() + 50 * scale
         start_x = point.x() - (3 * (side + gap) + side / 2.0)
-        painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
-        painter.setBrush(QColor(216, 219, 224, 242))
         for i in range(4):
             x = start_x + i * (side + gap)
+            if selection is not None and i + 1 == selection:
+                # Marcador do quadrado ativo: dourado, igual à cor do nó selecionado da roda.
+                painter.setPen(QPen(QColor(255, 202, 82, 255), 3.0 * scale))
+                painter.setBrush(QColor(255, 202, 82, 70))
+            else:
+                painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
+                painter.setBrush(QColor(216, 219, 224, 242))
             painter.drawRect(QRectF(x, top, side, side))
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).

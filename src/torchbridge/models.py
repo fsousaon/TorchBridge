@@ -111,6 +111,11 @@ def both_panels_open(active_panels: list[str]) -> bool:
 # setor selecionado enquanto a roda está aberta e o pet é o setor ativo (toggle no d-pad).
 PET_ACTIONS_SLOT = "P"
 
+# Quadrado da sublinha de pet actions que recebe o marcador ao abrir: o 4º (direito),
+# alinhado embaixo do ícone do slot 'P'. Navegação horizontal cicla (1..4 com wrap).
+PET_SUBMENU_DEFAULT = 4
+PET_SUBMENU_COUNT = 4
+
 
 # A sublinha de pet actions está visível no overlay? Só quando a roda está aberta, o setor
 # selecionado é o slot de pet (PET_ACTIONS_SLOT) e o toggle interno está ligado.
@@ -427,6 +432,8 @@ class OverlaySnapshot:
     radial_selection: int | None = None
     # Sublinha de pet actions (4 quadradinhos) visível sob o slot 'P' da roda.
     pet_submenu_open: bool = False
+    # Quadrado (1..4) com o marcador na sublinha de pet actions; None quando fechada.
+    pet_submenu_selection: int | None = None
     # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
     active_panels: list[str] = field(default_factory=lambda: ["", ""])
     aim_x: int | None = None

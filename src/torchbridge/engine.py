@@ -11,6 +11,8 @@ from .config import ConfigManager
 from .controller import ControllerHub
 from .mathutils import clamp, cursor_delta, radial_deadzone, radial_slot
 from .models import (
+    PET_SUBMENU_COUNT,
+    PET_SUBMENU_DEFAULT,
     ControllerState,
     Rect,
     SharedOverlayState,
@@ -75,6 +77,9 @@ class BridgeEngine(threading.Thread):
         # para BAIXO abre, para CIMA fecha. Desmarca o setor 'P' ou fecha a roda: a sublinha
         # some automaticamente (estado interno volta a False).
         self._pet_submenu: bool = False
+        # Quadrado (1..4) com o marcador na sublinha; ao abrir, nasce em PET_SUBMENU_DEFAULT
+        # (o 4º, embaixo do ícone P). D-pad ESQUERDO/DIRITO navega com wrap enquanto aberta.
+        self._pet_submenu_selection: int = PET_SUBMENU_DEFAULT
         # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
         self._active_panels: list[str] = ["", ""]
         self._center_combo_seen = False
@@ -158,10 +163,12 @@ class BridgeEngine(threading.Thread):
         self._direct_move_active = False
         # A roda fechou (interrupção): a sublinha de pet actions não pode sobreviver aberta.
         self._pet_submenu = False
+        self._pet_submenu_selection = PET_SUBMENU_DEFAULT
         self.shared.update(
             radial_active=False,
             radial_selection=None,
             pet_submenu_open=False,
+            pet_submenu_selection=None,
             aim_x=None,
             aim_y=None,
         )
@@ -306,16 +313,29 @@ class BridgeEngine(threading.Thread):
         if current is not None:
             current_slot = slots[current - 1] if 1 <= current <= len(slots) else ""
             if pet_submenu_open(active, current, current_slot, True):
-                # Setor do pet selecionado: o d-pad vertical é da sublinha (os toques de
+                # Setor do pet selecionado: o d-pad inteiro é da sublinha (os toques de
                 # tecla já são suprimidos em _handle_discrete_bindings pelo LB segurado).
                 if state.pressed("dpad_down") and not self._previous.pressed("dpad_down"):
                     if not self._pet_submenu:
                         self._pet_submenu = True
+                        # Ao abrir, o marcador nasce no quadrado padrão (o 4º).
+                        self._pet_submenu_selection = PET_SUBMENU_DEFAULT
                         hub.rumble(0.04, 0.10, 35)
                 elif state.pressed("dpad_up") and not self._previous.pressed("dpad_up"):
                     if self._pet_submenu:
                         self._pet_submenu = False
                         hub.rumble(0.04, 0.10, 35)
+                # Navegação horizontal: d-pad DIRITO/ESQUERDO move o marcador com wrap
+                # (do 4º volta pro 1º e vice-versa). Só com a sublinha aberta — fechada,
+                # esquerdo/direito são toques normais de tecla (mas com a roda aberta eles
+                # também são suprimidos, igual aos verticais).
+                elif self._pet_submenu:
+                    if state.pressed("dpad_right") and not self._previous.pressed("dpad_right"):
+                        self._pet_submenu_selection = (self._pet_submenu_selection % PET_SUBMENU_COUNT) + 1
+                        hub.rumble(0.03, 0.08, 30)
+                    elif state.pressed("dpad_left") and not self._previous.pressed("dpad_left"):
+                        self._pet_submenu_selection = ((self._pet_submenu_selection - 2) % PET_SUBMENU_COUNT) + 1
+                        hub.rumble(0.03, 0.08, 30)
             # Setor desmarcado do pet (análogo apontou outro setor): a sublinha se esconde
             # sozinha (estado interno volta a False — o próximo 'P' começa fechado).
             elif self._pet_submenu:
@@ -347,6 +367,19 @@ class BridgeEngine(threading.Thread):
                 if self._radial_selection is not None and 1 <= self._radial_selection <= len(slots)
                 else "",
                 self._pet_submenu,
+            ),
+            # O quadrado com marcador só tem sentido com a sublinha aberta.
+            pet_submenu_selection=(
+                self._pet_submenu_selection
+                if pet_submenu_open(
+                    active,
+                    self._radial_selection if active else None,
+                    slots[self._radial_selection - 1]
+                    if self._radial_selection is not None and 1 <= self._radial_selection <= len(slots)
+                    else "",
+                    self._pet_submenu,
+                )
+                else None
             ),
         )
 
