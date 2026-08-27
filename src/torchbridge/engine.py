@@ -331,6 +331,19 @@ class BridgeEngine(threading.Thread):
     # do click-to-move não é tocado; ao terminar, o controle volta ao jogador.
     # O clique NÃO entra em _held_mouse (a borda de subida do left no tick seguinte
     # dispararia a lógica de fechamento de painéis por click_zone).
+    #
+    # Com PAINEL ESQUERDO aberto (pending_panel) a ordem INVERTE e o clique só sai
+    # DEPOIS que o jogo termina de fechar o painel — com o painel abrindo na tela o
+    # botão do pet não recebe o clique de verdade (bug reportado em ago/2026):
+    #   0.00    letra do painel esquerdo (fecha o painel no jogo)
+    #   0.50    500 ms de espera (PET_PANEL_CLOSE_DELAY — a animação de fechamento)
+    #   0.50    movimento absoluto até o botão
+    #   0.62    mouse LEFT DOWN
+    #   0.71    mouse LEFT UP
+    #   0.77    retorno do cursor ao centro (âncora do movimento direto)
+    # Sem painel, o cronograma rápido de ~300 ms continua igual.
+    PET_PANEL_CLOSE_DELAY = 0.5
+
     def _handle_pet_click(self, now: float) -> None:
         seq = self._pet_click_seq
         if seq is None:
@@ -339,44 +352,47 @@ class BridgeEngine(threading.Thread):
         t = now - t0
         if t < 0:
             return
-        if t < 0.12:
+        # Com painel aberto: a letra sai na hora (animação de fechamento começa) e
+        # o cursor só vai até o botão depois dos 500 ms de espera.
+        panel_wait = self.PET_PANEL_CLOSE_DELAY if pending_panel else 0.0
+        if not self._pet_click_panel_done:
+            # Letra do painel esquerdo pendente: fecha o painel no jogo (a tecla
+            # repetida é o toggle) — ANTES do clique quando o painel está aberto.
+            if pending_panel:
+                self._tap_binding(pending_panel)
+            self._pet_click_panel_done = True
+            return
+        if t < panel_wait:
+            # Esperando a animação de fechamento do painel — o botão do pet só é
+            # clicável com o painel já fora da tela.
+            return
+        if t < panel_wait + 0.12:
             # Fase de ida: mantém o cursor no botão (defensivo — o move já aconteceu
-            # na confirmação; reenviar o mesmo ponto absoluto é idempotente).
+            # na fase anterior; reenviar o mesmo ponto absoluto é idempotente).
             self.injector.move(target_x, target_y)
             return
-        if t < 0.21:
+        if t < panel_wait + 0.21:
             # Descida: aperta o botão esquerdo exatamente uma vez na borda.
             if self._pet_click_down:
                 return
             if self.injector.mouse_button("left", True):
                 self._pet_click_down = True
             return
-        if t < 0.24:
+        if t < panel_wait + 0.24:
             # Solta na hora que chega (e logo em seguida, se o tick atrasou):
             # nunca segura o clique além do tempo de um clique físico.
             if self._pet_click_down:
                 self.injector.mouse_button("left", False)
                 self._pet_click_down = False
             return
-        if t < 0.30:
-            # Letra do painel esquerdo pendente: fecha o painel no jogo (a tecla
-            # repetida é o toggle), DEPOIS do clique — o jogo processa o estado do
-            # pet antes de receber o fechamento do painel.
-            if self._pet_click_panel_done:
-                return
-            if pending_panel:
-                self._tap_binding(pending_panel)
-            self._pet_click_panel_done = True
-            return
         # Fim (ou tick que puxou fases por atraso): garante solta, garante a letra
         # do painel (nunca perde) e devolve o cursor ao centro — fim da sequência.
+        if not self._pet_click_panel_done and pending_panel:
+            self._tap_binding(pending_panel)
+            self._pet_click_panel_done = True
         if self._pet_click_down:
             self.injector.mouse_button("left", False)
             self._pet_click_down = False
-        if not self._pet_click_panel_done:
-            if pending_panel:
-                self._tap_binding(pending_panel)
-            self._pet_click_panel_done = True
         self._pet_click_seq = None
         self.injector.move(return_x, return_y)
 
@@ -494,7 +510,11 @@ class BridgeEngine(threading.Thread):
                     now,
                 )
                 self._pet_click_down = False
-                self._pet_click_panel_done = False
+                # Sem painel, a fase da letra já está "resolvida" no armar — o caminho
+                # rápido não desperdiça o primeiro tick em fase vazia (o move sai no
+                # mesmo tick da confirmação, como sempre). Com painel, o primeiro tick
+                # dispara a letra e começa a contagem dos 500 ms de espera.
+                self._pet_click_panel_done = pending_panel is None
                 if pending_panel:
                     self._active_panels[0] = ""
                     self.shared.update(active_panels=list(self._active_panels))

@@ -18,6 +18,11 @@ from torchbridge.overlay import GameOverlay
 shared = SharedOverlayState()
 cfg = ConfigManager()
 cfg.reload()
+# Força a calibração em memória: o smoke não pode presumir o valor do perfil do
+# usuário em disco (ele liga/desliga a flag o tempo todo). O overlay lê config.get()
+# a cada paint, então basta mutar em memória — o perfil em disco fica intocado.
+cfg._data["overlay"]["show_calibration"] = True
+
 overlay = GameOverlay(shared, cfg)
 overlay.resize(1920, 1080)
 

@@ -559,9 +559,10 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertFalse(shared.get().radial_active)
             self.assertNotIn("1", engine.injector.tapped)
 
-    # A com a sublinha aberta E painel ESQUERDO aberto: a letra do painel fica PENDENTE
-    # na sequência e dispara DEPOIS do clique (o jogo processa o pet antes de fechar o
-    # painel). O índice 0 já zera na confirmação; o toque sai no fim da sequência.
+    # A com a sublinha aberta E painel ESQUERDO aberto: a letra do painel dispara NA
+    # HORA da confirmação (fecha o painel no jogo) e o clique do pet só sai DEPOIS dos
+    # 500 ms de espera da animação (testado em PetClickSequenceTests). O índice 0 já
+    # zera na confirmação.
     def test_a_with_submenu_closes_open_left_panel_first(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, shared = self._engine(directory)
@@ -570,18 +571,20 @@ class PetSubmenuTests(unittest.TestCase):
             # Painel esquerdo (C) está aberto antes da confirmação.
             engine._active_panels = ["C", ""]
             shared.update(active_panels=["C", ""])
-            # A confirma: a sequência arma e o índice 0 já zera...
+            # A confirma: a sequência arma, o índice 0 zera e a letra "C" sai NA HORA.
             self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8), now=0.10)
             self.assertEqual(engine._active_panels[0], "")
             self.assertEqual(shared.get().active_panels[0], "")
             self.assertNotIn("P", engine.injector.tapped)
             self.assertFalse(shared.get().pet_submenu_open)
             self.assertFalse(shared.get().radial_active)
-            # ...mas a letra "C" ainda NÃO disparou (aguarda o fim da sequência).
-            self.assertNotIn("C", engine.injector.tapped)
-            # Encerra a sequência (t=0,31): a letra do painel dispara aí.
-            self._tick(engine, directory, self._state(), now=0.41)
             self.assertIn("C", engine.injector.tapped)
+            # A sequência segue viva (fase de espera de 500 ms) e o cursor não se mexe
+            # até a animação de fechamento terminar.
+            self.assertIsNotNone(engine._pet_click_seq)
+            self.assertEqual(engine.injector.moved, [])
+            # Encerra a sequência (fim do caminho com painel em t=0,74): retorno ao centro.
+            self._tick(engine, directory, self._state(), now=0.85)
             self.assertIsNone(engine._pet_click_seq)
 
     # A com a sublinha aberta E painel esquerdo FECHADO: nenhum toque extra, só fecha tudo.
@@ -849,36 +852,75 @@ class PetClickSequenceTests(unittest.TestCase):
             self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
             # Nos ticks seguintes o stick esquerdo está inclinado (lmag > 0) — se o
             # bloqueio falhasse, o movimento direto moveria o cursor de novo.
-            for t in (0.15, 0.18, 0.25, 0.32, 0.36):
+            for t in (0.15, 0.18, 0.25, 0.32):
                 self._tick(engine, self._state(lx=0.5, ly=0.0), t)
-            # Fim da sequência com o stick já SOLTO: o retorno ao centro é o último
-            # movimento (com o stick ainda inclinado, o controle volta ao jogador e o
-            # movimento direto retoma — o que é o comportamento correto).
-            self._tick(engine, self._state(), 0.41)
+            # Fim da sequência (t=0,26) com o stick já SOLTO: o retorno ao centro é o
+            # último movimento (com o stick ainda inclinado, o controle volta ao
+            # jogador e o movimento direto retoma — o que é o comportamento correto).
+            self._tick(engine, self._state(), 0.36)
             # Movimentos: ida no armar (target) + reafirmação na fase de ida (target, x2)
             # + retorno final (anchor). NENHUM do stick.
             self.assertEqual(engine.injector.moved, [target, target, target, anchor])
 
-    # Painel esquerdo aberto: a letra dispara DEPOIS do clique (pet primeiro).
-    def test_pending_panel_fires_after_click(self):
+    # Painel esquerdo aberto: a letra dispara NA HORA (fecha o painel no jogo) e o
+    # clique só sai DEPOIS dos 500 ms de espera da animação (PET_PANEL_CLOSE_DELAY) —
+    # com o painel ainda abrindo na tela o botão do pet não recebe o clique.
+    def test_pending_panel_closes_first_then_clicks_after_delay(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, _ = self._engine(directory)
             self._prep(engine, directory, square=4, anchor=(960, 500))
+            rect = Rect(0, 0, 1920, 1080)
+            target = pet_click_point(rect, 4)
             engine._active_panels = ["C", ""]
             self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
-            self._tick(engine, self._state(), 0.25)  # down
-            self._tick(engine, self._state(), 0.32)  # up
-            # Clique completo...
-            self.assertIn(("mouse", "left", True), engine.injector.events)
-            self.assertIn(("mouse", "left", False), engine.injector.events)
-            # ...mas a letra "C" ainda não — fase do painel vem depois.
-            self.assertNotIn("C", engine.injector.tapped)
-            self._tick(engine, self._state(), 0.41)
+            # A letra "C" saiu NA HORA e zerou o índice 0 (o jogo fecha o painel)...
             self.assertIn("C", engine.injector.tapped)
-            # A letra sai depois do up.
-            up = next(i for i, e in enumerate(engine.injector.events) if e == ("mouse", "left", False))
-            tap = next(i for i, e in enumerate(engine.injector.events) if e == ("tap", "C"))
-            self.assertGreater(tap, up)
+            self.assertEqual(engine._active_panels[0], "")
+            # ...mas o cursor AINDA não se mexeu (fase de espera de 500 ms).
+            self.assertEqual(engine.injector.moved, [])
+            self._tick(engine, self._state(), 0.30)  # t=0,20: ainda esperando
+            self._tick(engine, self._state(), 0.40)  # t=0,30: ainda esperando
+            self.assertEqual(engine.injector.moved, [])
+            # t=0,50: fim da espera — o cursor vai até o botão (ida).
+            self._tick(engine, self._state(), 0.60)
+            self.assertEqual(engine.injector.moved, [target])
+            # t=0,63: down (fase de descida começa em t=0,62).
+            self._tick(engine, self._state(), 0.73)
+            self.assertIn(("mouse", "left", True), engine.injector.events)
+            # t=0,71: up (fase de subida começa em t=0,71).
+            self._tick(engine, self._state(), 0.82)
+            self.assertIn(("mouse", "left", False), engine.injector.events)
+            # t=0,75: fim (começa em t=0,74) — retorno ao centro.
+            self._tick(engine, self._state(), 0.85)
+            self.assertEqual(engine.injector.moved[-1], (960, 500))
+            self.assertIsNone(engine._pet_click_seq)
+            # Ordem cronológica: letra → ida → down → up → retorno.
+            events = engine.injector.events
+            tap = events.index(("tap", "C"))
+            first_go = events.index(("move",) + tuple(target))
+            down = next(i for i, e in enumerate(events) if e == ("mouse", "left", True))
+            up = next(i for i, e in enumerate(events) if e == ("mouse", "left", False))
+            self.assertLess(tap, first_go)
+            self.assertLess(first_go, down)
+            self.assertLess(down, up)
+            self.assertGreaterEqual(events.index(("move",) + tuple((960, 500))), up)
+
+    # Sem painel aberto o caminho rápido continua ~300 ms (a espera de 500 ms não se aplica).
+    def test_no_panel_keeps_fast_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._prep(engine, directory, square=4, anchor=(960, 500))
+            rect = Rect(0, 0, 1920, 1080)
+            target = pet_click_point(rect, 4)
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self.assertEqual(engine.injector.moved[0], target)  # ida já no armar
+            self._tick(engine, self._state(), 0.22)  # t=0,12: down
+            self.assertIn(("mouse", "left", True), engine.injector.events)
+            self._tick(engine, self._state(), 0.32)  # t=0,22: up
+            self.assertIn(("mouse", "left", False), engine.injector.events)
+            self._tick(engine, self._state(), 0.42)  # t=0,32: fim
+            self.assertIsNone(engine._pet_click_seq)
+            # Total ~320 ms (arma em 0,10, fim em 0,42) — longe dos ~820 ms do caminho com painel.
 
     # Interrupção (_release_all) no meio da sequência: solta o botão esquerdo e descarta.
     def test_release_all_cancels_in_flight(self):
