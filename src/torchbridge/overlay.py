@@ -74,11 +74,12 @@ class GameOverlay(QWidget):
         self._radial_last_time = time.monotonic()
         # Duração da animação do radial em cada direção (aparecer e sumir).
         self._radial_anim_seconds = 0.2
-        # Progresso da animação da sublinha de pet (0 = escondida atrás do nó, 1 = no lugar).
-        # As bolinhas deslizam de trás do ícone da opção P para baixo da fileira.
+        # Progresso da animação da sublinha de pet (0 = tudo dentro do nó P, 1 = no lugar).
+        # As bolinhas saem de DENTRO do nó P (todas no centro dele) e abrem em leque
+        # até a fileira final, cada uma chegando 75ms depois da anterior (pá, pá, pá, pá).
         self._pet_submenu_progress = 0.0
         self._pet_submenu_last_time = time.monotonic()
-        self._pet_submenu_anim_seconds = 0.2
+        self._pet_submenu_anim_seconds = 0.3
         # Último nó P e marcador com a sublinha ABERTA — guardados para a animação de
         # SAÍDA: no tick em que a sublinha fecha, o snapshot já zera pet_submenu_open e
         # a seleção, então sem esses backups a saída não teria onde partir.
@@ -313,11 +314,12 @@ class GameOverlay(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     str(radial_slots[index]),
                 )
-        # Sublinha de pet actions: 4 quadradinhos cinza sob o nó do slot 'P', o 4º alinhado
+        # Sublinha de pet actions: 4 círculos cinza sob o nó do slot 'P', o 4º alinhado
         # no eixo do nó. Visível quando snapshot.pet_submenu_open (roda aberta + pet
-        # selecionado + d-pad baixo). O quadrado marcado fica dourado. Desenhada com a
-        # animação de entrada/saída própria: as bolinhas deslizam de TRÁS do ícone da
-        # opção P para baixo da fileira (e voltam ao fechar), com fade e cascata.
+        # selecionado + d-pad baixo). O círculo marcado fica dourado. Animação
+        # entrada/saída: as bolinhas nascem no CENTRO do nó P e abrem em leque até a
+        # fileira (e voltam ao fechar), com fade e chegadas em cascata — a 4ª pá,
+        # a 3ª pá, a 2ª pá, a 1ª (mais distante) por último.
         pet_progress = self._pet_submenu_progress
         if snapshot.pet_submenu_open and selected_point is not None:
             # Sublinha aberta: atualiza os backups (nó P atual + marcador) — eles
@@ -358,16 +360,20 @@ class GameOverlay(QWidget):
     # ícone da ação correspondente (1=espada/agressivo, 2=escudo/defensivo,
     # 3=pássaro/passivo, 4=moeda/vendedor) e o círculo `selection` (1..4) recebe o
     # marcador: borda mais grossa na cor dourada da roda selecionada (255, 202, 82).
-    # Animação de entrada/saída (`progress` 0→1): as bolinhas nascem ESCONDIDAS ATRÁS
-    # do ícone da opção P (clip na base do ícone) e deslizam para baixo da fileira,
-    # com fade e cascata — a 4ª (debaixo do nó) sai primeiro, a 1ª por último. Ao
-    # fechar, o mesmo caminho em reverso: voltam para trás do ícone e somem.
-    PET_SUBMENU_STAGGER = 0.12  # atraso do fade/slide de cada bolinha relativa à anterior
-    # Distância do slide (em 1080p, sem escala): do lugar final até TOTALMENTE atrás do
-    # ícone P. O clip começa 44px abaixo do centro do nó (logo sob a base do ícone);
-    # para a bolinha (raio 22) começar INVISÍVEL, seu fundo (cy+22) tem de ficar acima
-    # do clip → slide >= 726 - (698 - 22) ≈ 50. Usamos 78: folga de 28px, zero vazamento.
-    PET_SUBMENU_SLIDE = 78.0
+    # Animação de entrada/saída (`progress` 0→1): TODAS as bolinhas nascem no CENTRO
+    # do nó P e cada uma desliza numa diagonal até o próprio lugar final — a 4ª só
+    # desce (72px), a 3ª desce 72px e vai 64px à esquerda, a 2ª 72px + 128px, a 1ª
+    # 72px + 192px — como se brotassem de dentro da opção P. Chegadas em cascata
+    # (pá, pá, pá, pá): cada bolinha parte 75ms depois da anterior e leva 75ms para
+    # chegar, então cada uma atinge o destino quando a próxima está na metade do
+    # caminho; a 1ª, a mais distante, fecha por último. Ao fechar, o mesmo caminho
+    # em reverso: voltam para o centro do nó e somem.
+    # O clip (base do ícone P) segura as bolinhas enquanto elas ainda estão atrás
+    # do ícone — é isso que vende o "sair de dentro do menu": nada vazia por cima.
+    # Duração 0.3s dividida em 4 JANELAS iguais de 25% (75ms cada): a bolinha i
+    # viaja da 0 à 1 da própria janela — chegadas em 25/50/75/100% do progresso,
+    # ou seja, a cada 75ms (pá, pá, pá, pá), a mais distante fechando por último.
+    PET_SUBMENU_STAGGER = 0.25  # janela de progresso de cada bolinha (4 * 0.25 = 1.0)
 
     def _draw_pet_submenu(
         self,
@@ -387,26 +393,37 @@ class GameOverlay(QWidget):
         center_y = top + side / 2.0
         # O ícone (31x31) entra no círculo com leve respiro: 78% do diâmetro.
         icon_size = side * 0.78
-        # Clip: a sublinha só é visível ABAIXO da base do ícone da opção P — é assim que
-        # as bolinhas "saiam de trás da opção". O ícone P desenha com ~66px de altura
-        # (86x71 em 80px de largura), então 44px abaixo do centro fica folga de sobra
-        # por baixo dele e segura a sublinha toda (fileira termina a 72px abaixo).
+        # Clip: a sublinha só é visível ABAIXO da base do ícone da opção P — é assim
+        # que as bolinhas "saem de dentro da opção": enquanto a diagonal ainda está
+        # atrás do ícone, o clip as segura; nada vaza por cima. O ícone P desenha com
+        # ~66px de altura (86x71 em 80px de largura), então 44px abaixo do centro
+        # fica folga de sobra por baixo dele e segura a sublinha toda (fileira
+        # termina a 72px abaixo).
         clip_top = point.y() + 44 * scale
         clip_bottom = top + side + 8 * scale
         painter.save()
         painter.setClipRect(QRectF(point.x() - 220 * scale, clip_top, 440 * scale, clip_bottom - clip_top))
         base_opacity = painter.opacity()
+        # Cada bolinha tem uma JANELA de progresso [start, start + stagger] dentro
+        # do 0→1 global: parte do nó e chega ao destino no fim da janela. As 4
+        # janelas encadeiam sem sobrepor nem folga (25% cada, 75ms a 0.3s): a 4ª
+        # (a mais perto do nó) viaja em [0, 0.25], a 3ª em [0.25, 0.5], a 2ª em
+        # [0.5, 0.75], a 1ª em [0.75, 1.0] — chegada a cada 75ms, a mais distante
+        # por último. Na saída, o progresso desce e a ordem inverte de graça.
         stagger = self.PET_SUBMENU_STAGGER
-        span = 1.0 - stagger * 3  # janela de cada bolinha (a 1ª tem o maior atraso)
         for i in range(4):
-            # Cascata: a 4ª bolinha (i=3, debaixo do nó) começa primeiro; a 1ª (i=0)
-            # termina exatamente em progress=1. O slide desloca cada círculo PET_SUBMENU_SLIDE
-            # px para cima do lugar final: no 0 ela está atrás do ícone, escondida pelo clip.
-            raw = (progress - stagger * (3 - i)) / span
+            # i=3 é a 4ª bolinha (debaixo do nó): janela [0, stagger]; i=0 (a 1ª):
+            # janela [3*stagger, 4*stagger]. O `start` cresce conforme se afasta do nó.
+            start = stagger * (3 - i)
+            raw = (progress - start) / stagger
             p_i = max(0.0, min(1.0, raw))
             eased = p_i * p_i * (3.0 - 2.0 * p_i)
-            cy = center_y - self.PET_SUBMENU_SLIDE * scale * (1.0 - eased)
-            cx = center4_x - (3 - i) * (side + gap)
+            # Lugar final da bolinha (mesma fileira desenhada sem animação).
+            final_x = center4_x - (3 - i) * (side + gap)
+            final_y = center_y
+            # Partida: o CENTRO do nó P (point). Lerp radial nó → lugar final.
+            cx = point.x() + (final_x - point.x()) * eased
+            cy = point.y() + (final_y - point.y()) * eased
             # Fade individual por cima da opacidade herdada da roda.
             painter.setOpacity(base_opacity * (0.2 + 0.8 * eased))
             if selection is not None and i + 1 == selection:
