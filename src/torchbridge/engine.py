@@ -295,12 +295,17 @@ class BridgeEngine(threading.Thread):
         if active and selection is not None and selection != self._radial_selection:
             self._radial_selection = selection
             hub.rumble(0.04, 0.10, 35)
+        # A sublinha acompanha a seleção PERSISTIDA (self._radial_selection), não a
+        # seleção instantânea do analógico: assim, com a alavanca de volta ao centro
+        # (radial_slot devolve None), o setor segue o último que o analogo apontou — e o
+        # d-pad BAIXO abre o submenu sem precisar manter o stick inclinado.
+        current = self._radial_selection if active else None
         # Sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad PARA BAIXO abre,
         # para CIMA fecha — enquanto a roda está aberta e o setor do pet é o selecionado.
         # Vibra só na transição real (abriu ou fechou).
-        if active and selection is not None:
-            current_slot = slots[selection - 1] if 1 <= selection <= len(slots) else ""
-            if pet_submenu_open(active, selection, current_slot, True):
+        if current is not None:
+            current_slot = slots[current - 1] if 1 <= current <= len(slots) else ""
+            if pet_submenu_open(active, current, current_slot, True):
                 # Setor do pet selecionado: o d-pad vertical é da sublinha (os toques de
                 # tecla já são suprimidos em _handle_discrete_bindings pelo LB segurado).
                 if state.pressed("dpad_down") and not self._previous.pressed("dpad_down"):
@@ -311,8 +316,8 @@ class BridgeEngine(threading.Thread):
                     if self._pet_submenu:
                         self._pet_submenu = False
                         hub.rumble(0.04, 0.10, 35)
-            # Setor desmarcado do pet: a sublinha se esconde sozinha (estado interno volta
-            # a False — o próximo 'P' começa fechado).
+            # Setor desmarcado do pet (análogo apontou outro setor): a sublinha se esconde
+            # sozinha (estado interno volta a False — o próximo 'P' começa fechado).
             elif self._pet_submenu:
                 self._pet_submenu = False
         else:

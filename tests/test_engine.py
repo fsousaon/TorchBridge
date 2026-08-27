@@ -523,6 +523,29 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertEqual(shared.get().radial_selection, 5)
             self.assertFalse(shared.get().pet_submenu_open)
 
+    # Regressão: com a alavanca de volta ao CENTRO (radial_slot → None), o setor persistido
+    # segue valendo — d-pad BAIXO abre a sublinha sem manter o stick inclinado no P.
+    def test_stick_at_center_still_opens_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            # Alavanca relaxa para o centro (rx=ry=0): o P segue selecionado.
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=0.0))
+            self.assertEqual(shared.get().radial_selection, 5)
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=0.0, ry=0.0))
+            self.assertTrue(shared.get().pet_submenu_open)
+
+    # Com a sublinha aberta e stick no centro, d-pad CIMA continua fechando.
+    def test_stick_at_center_still_closes_submenu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=0.0))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=0.0, ry=0.0))
+            self.assertTrue(shared.get().pet_submenu_open)
+            self._tick(engine, directory, self._state(("lb", "dpad_up"), rx=0.0, ry=0.0))
+            self.assertFalse(shared.get().pet_submenu_open)
+
     # Pausa/interrupção (_release_all) zera a sublinha aberta.
     def test_release_all_closes_submenu(self):
         with tempfile.TemporaryDirectory() as directory:
