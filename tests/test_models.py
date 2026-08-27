@@ -16,6 +16,7 @@ from torchbridge.models import (
     load_hud_mask,
     point_in_polygon,
     pet_actions_target_rect,
+    pet_click_point,
     pet_submenu_open,
     toggle_panel,
     panels_x_shift,
@@ -299,6 +300,59 @@ class PetActionsSlotTests(unittest.TestCase):
     # Slot vem do perfil: tolera maiúscula/minuscula e espaços.
     def test_slot_case_and_spaces(self):
         self.assertTrue(pet_submenu_open(True, 5, " p ", True))
+
+
+class PetClickPointTests(unittest.TestCase):
+    # pet_click_point: projeta o centro de cada botão do Pet-actions.svg (viewBox
+    # 156x201) para pixels absolutos da tela, escalando com a caixinha calibrada.
+    # Ordem: 1=vermelho (agressivo), 2=azul (defensivo), 3=branco (passivo),
+    # 4=quadrado amarelo (vendedor).
+
+    def _rect(self, left=0, top=0, width=1920, height=1080):
+        return Rect(left, top, width, height)
+
+    # 1080p com a caixinha colada no canto: os centros batem com os valores do SVG
+    # escalados (w = 156*1.09 = 170,04; h = 201*1.08 = 217,08).
+    def test_points_at_1080p(self):
+        rect = self._rect()
+        left, top, w, h = pet_actions_target_rect(rect)
+        expected = [
+            (round(left + 42.5 / 156.0 * w), round(top + 181.5 / 201.0 * h)),
+            (round(left + 75.5 / 156.0 * w), round(top + 181.5 / 201.0 * h)),
+            (round(left + 108.5 / 156.0 * w), round(top + 181.5 / 201.0 * h)),
+            (round(left + 125.0 / 156.0 * w), round(top + 23.0 / 201.0 * h)),
+        ]
+        for index in range(1, 5):
+            self.assertEqual(pet_click_point(rect, index), expected[index - 1])
+
+    # Os três círculos (ações de postura) ficam na fileira inferior; o quadrado
+    # (vendedor) no topo — o y do 4º deve ser bem menor que o dos outros três.
+    def test_seller_above_circles(self):
+        rect = self._rect()
+        xs, ys = zip(*(pet_click_point(rect, i) for i in range(1, 5)))
+        self.assertLess(ys[3], ys[0] - 100)
+        # E os três círculos compartilham a mesma altura (fileira inferior).
+        self.assertEqual(ys[0], ys[1])
+        self.assertEqual(ys[1], ys[2])
+
+    # Escala com a janela: numa janela deslocada e em resolução menor, o ponto 1
+    # acompanha a caixinha (mesma fração do SVG, base diferente).
+    def test_point_scales_with_window(self):
+        rect = self._rect(left=100, top=50, width=1280, height=720)
+        left, top, w, h = pet_actions_target_rect(rect)
+        self.assertEqual(
+            pet_click_point(rect, 1),
+            (round(left + 42.5 / 156.0 * w), round(top + 181.5 / 201.0 * h)),
+        )
+
+    # Índice fora de 1..4: erro explícito (chamar com o valor errado do marcador
+    # seria um bug grave — clique no ponto errado).
+    def test_out_of_range_raises(self):
+        rect = self._rect()
+        with self.assertRaises(ValueError):
+            pet_click_point(rect, 0)
+        with self.assertRaises(ValueError):
+            pet_click_point(rect, 5)
 
 
 class HudMaskAssetTests(unittest.TestCase):

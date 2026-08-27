@@ -6,19 +6,23 @@ import unittest
 from torchbridge.config import ConfigManager
 from torchbridge.engine import BridgeEngine
 from torchbridge.mathutils import cursor_delta, radial_deadzone
-from torchbridge.models import ControllerState, Rect, SharedOverlayState
+from torchbridge.models import ControllerState, Rect, SharedOverlayState, pet_click_point
 
 
 class FakeInjector:
     # Substituto do InputInjector: grava os eventos em vez de enviá-los ao Windows.
+    # `events` registra a ORDEM cronológica de tudo (move, mouse, tap) — as asserts
+    # de sequência (clique do pet: ida → down → up → retorno) usam essa lista.
     def __init__(self) -> None:
         self.moved: list[tuple[int, int]] = []
         self.cursor = (100, 100)
         self.buttons: dict[str, bool] = {}
         self.tapped: list[str] = []
+        self.events: list[tuple] = []
 
     def move(self, x: int, y: int) -> bool:
         self.moved.append((x, y))
+        self.events.append(("move", x, y))
         return True
 
     def cursor_position(self) -> tuple[int, int]:
@@ -26,14 +30,17 @@ class FakeInjector:
 
     def key(self, name: str, down: bool) -> bool:
         self.buttons[name] = down
+        self.events.append(("key", name, down))
         return True
 
     def mouse_button(self, button: str, down: bool) -> bool:
         self.buttons[button] = down
+        self.events.append(("mouse", button, down))
         return True
 
     def tap(self, name: str) -> bool:
         self.tapped.append(name)
+        self.events.append(("tap", name))
         return True
 
 
@@ -421,10 +428,18 @@ class PetSubmenuTests(unittest.TestCase):
         engine.injector = FakeInjector()
         return engine, shared
 
-    def _tick(self, engine: BridgeEngine, directory: str, state: ControllerState) -> None:
+    def _tick(
+        self,
+        engine: BridgeEngine,
+        directory: str,
+        state: ControllerState,
+        now: float = 0.0,
+        rect: "Rect | None" = None,
+    ) -> None:
         cfg = engine.config.get()
-        rect = Rect(0, 0, 1920, 1080)
-        engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
+        if rect is None:
+            rect = Rect(0, 0, 1920, 1080)
+        engine._process_active(FakeHub(), state, rect, cfg, now, 0.05)
         # O loop real (run()) registra o estado do tick em _previous no fim de cada ciclo;
         # aqui fazemos o mesmo para as bordas (subida/descida) funcionarem nos ticks seguintes.
         engine._previous = state
@@ -544,24 +559,30 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertFalse(shared.get().radial_active)
             self.assertNotIn("1", engine.injector.tapped)
 
-    # A com a sublinha aberta E painel ESQUERDO aberto: dispara a letra do painel (fecha
-    # no jogo) e zera o índice 0, sem disparar o atalho do P.
+    # A com a sublinha aberta E painel ESQUERDO aberto: a letra do painel fica PENDENTE
+    # na sequência e dispara DEPOIS do clique (o jogo processa o pet antes de fechar o
+    # painel). O índice 0 já zera na confirmação; o toque sai no fim da sequência.
     def test_a_with_submenu_closes_open_left_panel_first(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, shared = self._engine(directory)
-            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
-            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8), now=0.0)
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8), now=0.05)
             # Painel esquerdo (C) está aberto antes da confirmação.
             engine._active_panels = ["C", ""]
             shared.update(active_panels=["C", ""])
-            self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8))
-            # A letra do painel esquerdo foi disparada (fecha o painel no jogo).
-            self.assertIn("C", engine.injector.tapped)
-            self.assertNotIn("P", engine.injector.tapped)
+            # A confirma: a sequência arma e o índice 0 já zera...
+            self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8), now=0.10)
             self.assertEqual(engine._active_panels[0], "")
             self.assertEqual(shared.get().active_panels[0], "")
+            self.assertNotIn("P", engine.injector.tapped)
             self.assertFalse(shared.get().pet_submenu_open)
             self.assertFalse(shared.get().radial_active)
+            # ...mas a letra "C" ainda NÃO disparou (aguarda o fim da sequência).
+            self.assertNotIn("C", engine.injector.tapped)
+            # Encerra a sequência (t=0,31): a letra do painel dispara aí.
+            self._tick(engine, directory, self._state(), now=0.41)
+            self.assertIn("C", engine.injector.tapped)
+            self.assertIsNone(engine._pet_click_seq)
 
     # A com a sublinha aberta E painel esquerdo FECHADO: nenhum toque extra, só fecha tudo.
     def test_a_with_submenu_no_left_panel_no_extra_tap(self):
@@ -574,6 +595,10 @@ class PetSubmenuTests(unittest.TestCase):
             # Só o A confirmou; nada extra foi disparado.
             self.assertEqual(engine.injector.tapped, [])
             self.assertEqual(engine._active_panels, ["", ""])
+            # E a sequência termina sem tocar em tecla (painel pendente = None).
+            self._tick(engine, directory, self._state(), now=0.41)
+            self.assertEqual(engine.injector.tapped, [])
+            self.assertIsNone(engine._pet_click_seq)
 
     # A com a roda aberta NÃO dispara a tecla padrão do A ("1"): o toque é da confirmação.
     def test_a_key_tap_suppressed_when_wheel_open(self):
@@ -711,3 +736,186 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertIsNone(shared.get().radial_selection)
             self.assertFalse(shared.get().pet_submenu_open)
             self.assertNotIn("7", engine.injector.tapped)
+
+
+class PetClickSequenceTests(unittest.TestCase):
+    # Sequência de clique das ações do pet: A com a sublinha aberta arma o cursor,
+    # que vai até o botão na caixinha do pet, clica (left down/up) e volta ao centro —
+    # com os sticks BLOQUEADOS durante todo o trajeto. A ordem cronológica dos eventos
+    # (movimento, descida, subida, retorno, letra do painel) é o contrato testado aqui.
+    # Vetor do setor P (radial_slot): rx=-0.6, ry=0.8 → setor 5.
+    #
+    # Cronograma das fases (t = now - t0, com t0 = 0,10 no armar):
+    #   t < 0,12 (now < 0,22)   -> movimento até o botão (fase de ida)
+    #   0,12..0,21 (0,22..0,31) -> mouse LEFT DOWN
+    #   0,21..0,24 (0,31..0,34) -> mouse LEFT UP
+    #   0,24..0,30 (0,34..0,40) -> letra do painel pendente
+    #   t >= 0,30 (now >= 0,40) -> fim: garante tudo + retorno ao centro
+    # Os testes usam now no MEIO de cada fase: 0,15 / 0,25 / 0,32 / 0,36 / 0,41.
+
+    @staticmethod
+    def _state(buttons: tuple[str, ...] = (), **kw) -> ControllerState:
+        return ControllerState(connected=True, buttons=frozenset(buttons), **kw)
+
+    def _engine(self, directory: str):
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        engine.injector = FakeInjector()
+        return engine, shared
+
+    def _tick(
+        self,
+        engine: BridgeEngine,
+        state: ControllerState,
+        now: float,
+        rect: "Rect | None" = None,
+    ) -> None:
+        cfg = engine.config.get()
+        if rect is None:
+            rect = Rect(0, 0, 1920, 1080)
+        engine._process_active(FakeHub(), state, rect, cfg, now, 0.05)
+        engine._previous = state
+
+    # Prepara: roda aberta no P, sublinha aberta, âncora conhecida.
+    def _prep(self, engine, directory, square: int = 4, anchor=(960, 500)):
+        self._tick(engine, self._state(("lb",), rx=-0.6, ry=0.8), 0.0)
+        self._tick(engine, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8), 0.05)
+        self.assertTrue(engine._pet_submenu)
+        if square != 4:
+            # Navega o marcador até o quadrado pedido (direito = +1 com wrap):
+            # do 4, 1 passo→1, 2→2, 3→3 (4 passos voltam ao 4).
+            for _ in range(square):
+                self._tick(engine, self._state(("lb", "dpad_right"), rx=-0.6, ry=0.8), 0.06)
+                self._tick(engine, self._state(("lb",), rx=-0.6, ry=0.8), 0.07)
+        engine._last_anchor = anchor
+        return engine
+
+    # A confirma com o quadrado 4 (vendedor): o cursor vai ao ponto do quadrado amarelo
+    # (pet_click_point 4), clica e volta à âncora — nessa ordem.
+    def test_confirm_moves_clicks_returns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            anchor = (960, 500)
+            self._prep(engine, directory, square=4, anchor=anchor)
+            rect = Rect(0, 0, 1920, 1080)
+            target = pet_click_point(rect, 4)
+            # A confirma (t0=0,10): movimento até o botão já sai neste tick.
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self.assertEqual(engine.injector.moved[0], target)
+            # Desce o clique (fase down, now=0,25).
+            self._tick(engine, self._state(), 0.25)
+            self.assertIn(("mouse", "left", True), engine.injector.events)
+            # Sobe (fase up, now=0,32) — o retorno AINDA não aconteceu.
+            self._tick(engine, self._state(), 0.32)
+            self.assertIn(("mouse", "left", False), engine.injector.events)
+            self.assertNotIn(anchor, engine.injector.moved)
+            # Fim (now=0,41): retorno ao centro e fim da sequência.
+            self._tick(engine, self._state(), 0.41)
+            self.assertEqual(engine.injector.moved[-1], anchor)
+            self.assertIsNone(engine._pet_click_seq)
+            # Nada disparou o atalho do P.
+            self.assertNotIn("P", engine.injector.tapped)
+            # Ordem cronológica (na MESMA lista de eventos): ida → down → up → retorno.
+            events = engine.injector.events
+            down = next(i for i, e in enumerate(events) if e == ("mouse", "left", True))
+            up = next(i for i, e in enumerate(events) if e == ("mouse", "left", False))
+            first_go = events.index(("move",) + tuple(target))
+            last_return = events.index(("move",) + tuple(anchor))
+            self.assertLess(first_go, down)
+            self.assertLess(down, up)
+            self.assertGreaterEqual(last_return, up)
+
+    # Cada quadrado leva o cursor ao ponto CERTO (1=vermelho, 2=azul, 3=branco, 4=amarelo).
+    def test_each_square_targets_its_button(self):
+        rect = Rect(0, 0, 1920, 1080)
+        for square in (1, 2, 3, 4):
+            with tempfile.TemporaryDirectory() as directory:
+                engine, _ = self._engine(directory)
+                self._prep(engine, directory, square=square, anchor=(960, 500))
+                self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+                self.assertEqual(engine.injector.moved[0], pet_click_point(rect, square))
+
+    # Durante a sequência os sticks NÃO movem o cursor: o único movimento até o fim é o
+    # da sequência (ida + retorno) — nenhum movimento intermediário do analógico.
+    def test_sticks_blocked_during_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            anchor = (960, 500)
+            self._prep(engine, directory, square=4, anchor=anchor)
+            rect = Rect(0, 0, 1920, 1080)
+            target = pet_click_point(rect, 4)
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            # Nos ticks seguintes o stick esquerdo está inclinado (lmag > 0) — se o
+            # bloqueio falhasse, o movimento direto moveria o cursor de novo.
+            for t in (0.15, 0.18, 0.25, 0.32, 0.36):
+                self._tick(engine, self._state(lx=0.5, ly=0.0), t)
+            # Fim da sequência com o stick já SOLTO: o retorno ao centro é o último
+            # movimento (com o stick ainda inclinado, o controle volta ao jogador e o
+            # movimento direto retoma — o que é o comportamento correto).
+            self._tick(engine, self._state(), 0.41)
+            # Movimentos: ida no armar (target) + reafirmação na fase de ida (target, x2)
+            # + retorno final (anchor). NENHUM do stick.
+            self.assertEqual(engine.injector.moved, [target, target, target, anchor])
+
+    # Painel esquerdo aberto: a letra dispara DEPOIS do clique (pet primeiro).
+    def test_pending_panel_fires_after_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._prep(engine, directory, square=4, anchor=(960, 500))
+            engine._active_panels = ["C", ""]
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self._tick(engine, self._state(), 0.25)  # down
+            self._tick(engine, self._state(), 0.32)  # up
+            # Clique completo...
+            self.assertIn(("mouse", "left", True), engine.injector.events)
+            self.assertIn(("mouse", "left", False), engine.injector.events)
+            # ...mas a letra "C" ainda não — fase do painel vem depois.
+            self.assertNotIn("C", engine.injector.tapped)
+            self._tick(engine, self._state(), 0.41)
+            self.assertIn("C", engine.injector.tapped)
+            # A letra sai depois do up.
+            up = next(i for i, e in enumerate(engine.injector.events) if e == ("mouse", "left", False))
+            tap = next(i for i, e in enumerate(engine.injector.events) if e == ("tap", "C"))
+            self.assertGreater(tap, up)
+
+    # Interrupção (_release_all) no meio da sequência: solta o botão esquerdo e descarta.
+    def test_release_all_cancels_in_flight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._prep(engine, directory, square=4, anchor=(960, 500))
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self._tick(engine, self._state(), 0.25)  # botão já baixado
+            self.assertTrue(engine._pet_click_down)
+            engine._release_all()
+            self.assertIsNone(engine._pet_click_seq)
+            self.assertFalse(engine._pet_click_down)
+            # O último evento de mouse é o soltar (nada fica retido).
+            mouse_events = [e for e in engine.injector.events if e[0] == "mouse"]
+            self.assertEqual(mouse_events[-1], ("mouse", "left", False))
+
+    # Sequência terminada: o próximo A com sublinha reaberta arma de novo do zero (estado
+    # de fase rearmado — não herda o "down" ou "panel_done" da anterior).
+    def test_second_sequence_is_fresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._prep(engine, directory, square=4, anchor=(960, 500))
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self._tick(engine, self._state(), 0.25)  # down
+            self._tick(engine, self._state(), 0.41)  # fim
+            self.assertIsNone(engine._pet_click_seq)
+            # Reabre roda + sublinha e confirma de novo (t0=0,55): a sequência roda outra vez.
+            self._tick(engine, self._state(("lb",), rx=-0.6, ry=0.8), 0.45)
+            self._tick(engine, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8), 0.50)
+            events_before = len(engine.injector.events)
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.55)
+            self._tick(engine, self._state(), 0.70)  # down da segunda sequência
+            self._tick(engine, self._state(), 0.86)  # fim da segunda
+            # Houve mais um ciclo completo de clique (down + up) depois do primeiro.
+            downs = [i for i, e in enumerate(engine.injector.events) if e == ("mouse", "left", True)]
+            self.assertEqual(len(downs), 2)
+            self.assertGreater(downs[1], events_before)
+            ups = [i for i, e in enumerate(engine.injector.events) if e == ("mouse", "left", False)]
+            self.assertEqual(len(ups), 2)
+            self.assertIsNone(engine._pet_click_seq)

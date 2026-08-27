@@ -20,6 +20,7 @@ from .models import (
     click_zone,
     load_hud_mask,
     panels_x_shift,
+    pet_click_point,
     pet_submenu_open,
     toggle_panel,
 )
@@ -86,6 +87,15 @@ class BridgeEngine(threading.Thread):
         self._pet_submenu_selection: int = PET_SUBMENU_DEFAULT
         # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
         self._active_panels: list[str] = ["", ""]
+        # Sequência de clique do pet em andamento: (x, y do alvo, retorno_x, retorno_y,
+        # letra do painel esquerdo pendente, t de início). Enquanto existe, o cursor é
+        # exclusivo da sequência — o stick não move o mouse — e o clique esquerdo
+        # retido pelo click-to-move não é tocado. None = nada em curso.
+        self._pet_click_seq: tuple[int, int, int, int, str | None, float] | None = None
+        # Flags de fase da sequência (rearmadas ao armar uma nova): botão esquerdo
+        # já foi baixado? a letra do painel pendente já disparou?
+        self._pet_click_down = False
+        self._pet_click_panel_done = False
         self._center_combo_seen = False
         self._center_combo_started: float | None = None
         self._center_combo_triggered = False
@@ -164,6 +174,15 @@ class BridgeEngine(threading.Thread):
             self.injector.mouse_button(button, False)
         self._held_keys.clear()
         self._held_mouse.clear()
+        # Interrupção no meio da sequência do pet: solta o botão esquerdo se o clique
+        # estava no ar e descarta o restante (o cursor não volta ao centro — quem
+        # deteve o foco detém o cursor; a sequência não sobrevive à pausa).
+        if self._pet_click_seq is not None:
+            if self._pet_click_down:
+                self.injector.mouse_button("left", False)
+                self._pet_click_down = False
+            self._pet_click_seq = None
+            self._pet_click_panel_done = False
         # Interrompe o "movimento direto ativo" para o retorno ao centro não disparar no tick de volta.
         self._direct_move_active = False
         # A roda fechou (interrupção): a sublinha de pet actions não pode sobreviver aberta.
@@ -297,6 +316,70 @@ class BridgeEngine(threading.Thread):
             if state.pressed(button) and not self._previous.pressed(button):
                 self._tap_binding(bindings.get(button))
 
+    # Sequência de clique das ações do pet (confirmada pelo A com a sublinha aberta).
+    # Não há tecla de teclado para essas ações: o cursor é levado ATÉ O BOTÃO na
+    # caixinha do pet (movimento absoluto — um único evento SendInput, instantâneo,
+    # sem interpolação), o botão esquerdo aperta e solta com o tempo de um clique
+    # físico e o cursor volta para o centro. Cronograma (t = segundos desde o A):
+    #   0.00  movimento absoluto até o botão (mesmo tick da confirmação)
+    #   0.12  mouse LEFT DOWN (o jogo já processou o hover em ~1 frame)
+    #   0.21  mouse LEFT UP (90 ms segurando — duração real de um clique)
+    #   0.24  letra do painel esquerdo pendente (fecha o painel com o cenário limpo)
+    #   0.30  retorno do cursor ao centro (âncora do movimento direto)
+    # Total ~300 ms — menos que um piscar de olhos. Durante toda a sequência o
+    # cursor é EXCLUSIVO daqui: _move_pointer ignora os sticks e o clique retido
+    # do click-to-move não é tocado; ao terminar, o controle volta ao jogador.
+    # O clique NÃO entra em _held_mouse (a borda de subida do left no tick seguinte
+    # dispararia a lógica de fechamento de painéis por click_zone).
+    def _handle_pet_click(self, now: float) -> None:
+        seq = self._pet_click_seq
+        if seq is None:
+            return
+        target_x, target_y, return_x, return_y, pending_panel, t0 = seq
+        t = now - t0
+        if t < 0:
+            return
+        if t < 0.12:
+            # Fase de ida: mantém o cursor no botão (defensivo — o move já aconteceu
+            # na confirmação; reenviar o mesmo ponto absoluto é idempotente).
+            self.injector.move(target_x, target_y)
+            return
+        if t < 0.21:
+            # Descida: aperta o botão esquerdo exatamente uma vez na borda.
+            if self._pet_click_down:
+                return
+            if self.injector.mouse_button("left", True):
+                self._pet_click_down = True
+            return
+        if t < 0.24:
+            # Solta na hora que chega (e logo em seguida, se o tick atrasou):
+            # nunca segura o clique além do tempo de um clique físico.
+            if self._pet_click_down:
+                self.injector.mouse_button("left", False)
+                self._pet_click_down = False
+            return
+        if t < 0.30:
+            # Letra do painel esquerdo pendente: fecha o painel no jogo (a tecla
+            # repetida é o toggle), DEPOIS do clique — o jogo processa o estado do
+            # pet antes de receber o fechamento do painel.
+            if self._pet_click_panel_done:
+                return
+            if pending_panel:
+                self._tap_binding(pending_panel)
+            self._pet_click_panel_done = True
+            return
+        # Fim (ou tick que puxou fases por atraso): garante solta, garante a letra
+        # do painel (nunca perde) e devolve o cursor ao centro — fim da sequência.
+        if self._pet_click_down:
+            self.injector.mouse_button("left", False)
+            self._pet_click_down = False
+        if not self._pet_click_panel_done:
+            if pending_panel:
+                self._tap_binding(pending_panel)
+            self._pet_click_panel_done = True
+        self._pet_click_seq = None
+        self.injector.move(return_x, return_y)
+
     # Roda de habilidades: LB + analógico direito escolhe o setor; A confirma o atalho e
     # soltar LB só fecha a roda (a confirmação saiu do soltar em ago/2026).
     def _handle_radial(
@@ -304,6 +387,8 @@ class BridgeEngine(threading.Thread):
         hub: ControllerHub,
         state: ControllerState,
         bindings: dict[str, Any],
+        rect: Rect,
+        now: float,
     ) -> None:
         active = state.pressed("lb")
         slots = bindings.get("radial_slots", [])
@@ -364,8 +449,10 @@ class BridgeEngine(threading.Thread):
 
         # Confirmação da roda é do botão A — PS cross / Xbox A / genérico A / Nintendo A
         # chegam todos normalizados como "a" (mapeamento SDL), um caminho cobre as
-        # famílias. Com a sublinha aberta: A fecha a sublinha E a roda (a ação do
-        # quadrado marcado é da próxima fase, quando as 4 ações do pet forem mapeadas).
+        # famílias. Com a sublinha aberta: A fecha a sublinha E a roda e dispara a
+        # ação do quadrado marcado — não existe tecla de teclado para as ações do pet,
+        # então o motor leva o mouse até o botão correspondente na caixinha do pet,
+        # clica e devolve o cursor ao centro (sequência em _handle_pet_click).
         # Sem sublinha: dispara o atalho do setor (o papel do antigo "soltar LB").
         if (
             open
@@ -383,12 +470,32 @@ class BridgeEngine(threading.Thread):
                     self._active_panels = next_panels
                     self.shared.update(active_panels=list(next_panels))
             else:
-                # Sublinha do pet aberta: se o painel ESQUERDO (índice 0) está aberto,
-                # dispara a letra dele ANTES de fechar tudo — a tecla repetida fecha o
-                # painel no jogo (mesma regra do toggle_panel), deixando o cenário limpo
-                # para a próxima fase (ações reais do pet).
-                if self._active_panels[0]:
-                    self._tap_binding(self._active_panels[0])
+                # Sublinha do pet aberta: arma a sequência de clique do quadrado
+                # marcado (1=agressivo/vermelho, 2=defensivo/azul, 3=passivo/branco,
+                # 4=vendedor/amarelo). A letra do painel ESQUERDO, se aberto, é
+                # pendurada na sequência e dispara DEPOIS do clique — mesma regra
+                # antiga, só que sequenciada para o jogo fechar o painel com o
+                # cenário limpo. O cursor de retorno é a âncora do movimento direto
+                # (o "centro" que o click-to-move já usa); fallback no âncora do perfil.
+                target = pet_click_point(rect, self._pet_submenu_selection)
+                if self._last_anchor:
+                    return_x, return_y = self._last_anchor
+                else:
+                    movement = self.config.get()["movement"]
+                    return_x = rect.left + rect.width * float(movement["anchor_x"])
+                    return_y = rect.top + rect.height * float(movement["anchor_y"])
+                pending_panel = self._active_panels[0] or None
+                self._pet_click_seq = (
+                    int(round(target[0])),
+                    int(round(target[1])),
+                    int(round(return_x)),
+                    int(round(return_y)),
+                    pending_panel,
+                    now,
+                )
+                self._pet_click_down = False
+                self._pet_click_panel_done = False
+                if pending_panel:
                     self._active_panels[0] = ""
                     self.shared.update(active_panels=list(self._active_panels))
             self._pet_submenu = False
@@ -453,11 +560,15 @@ class BridgeEngine(threading.Thread):
 
         # Movimento direto: exige analógico esquerdo inclinado, direito parado, roda fechada
         # e ao menos uma lateral livre — com os dois painéis abertos, o esquerdo vira cursor livre.
+        # Com a sequência de clique do pet em curso o cursor é EXCLUSIVO dela: os sticks
+        # ficam bloqueados até o retorno ao centro (evita disputar o cursor no meio do
+        # hover/clique do pet).
         if (
             self._mode == "direct"
             and lmag > 0
             and rmag == 0
             and not radial_active
+            and self._pet_click_seq is None
             and not both_panels_open(self._active_panels)
         ):
             # Âncora do herói em pixels, a partir das frações do perfil.
@@ -539,7 +650,10 @@ class BridgeEngine(threading.Thread):
         bindings = cfg["bindings"]
         self._handle_center_buttons(state, rect, bindings, now)
         self._handle_discrete_bindings(state, bindings)
-        self._handle_radial(hub, state, bindings)
+        # A roda antes da sequência: o A arma a sequência neste mesmo tick e o
+        # _handle_pet_click abaixo já faz o movimento até o botão na hora.
+        self._handle_radial(hub, state, bindings, rect, now)
+        self._handle_pet_click(now)
 
         center_combo = state.pressed("back") and state.pressed("start")
         # RB segura Shift (atacar sem avançar) e L3 segura Alt (ver itens); nunca durante o combo de calibração.
@@ -547,6 +661,16 @@ class BridgeEngine(threading.Thread):
         self._set_key(bindings.get("l3_hold", "ALT"), state.pressed("l3") and not center_combo)
 
         # Posiciona o cursor; retorna True quando o movimento direto deve segurar o clique esquerdo.
+        # Com a sequência do pet em curso os sticks estão bloqueados: nenhum move, nenhum
+        # clique retido e nenhuma borda de subida dispara a lógica de fechamento de painéis.
+        pet_seq_active = self._pet_click_seq is not None
+        if pet_seq_active:
+            # O clique do pet é injetado direto pelo _handle_pet_click (fora de
+            # _held_mouse): não mexe no botão esquerdo nem na borda de subida — o
+            # estado 'left' fica exatamente como estava antes da sequência, então
+            # nem a borda de descida (soltar por engano) nem a borda de subida
+            # (click_zone fechando painéis) disparam no meio do hover/clique.
+            return
         auto_move = self._move_pointer(state, rect, cfg, dt)
         # Limiar do perfil: a partir de quanto o gatilho vira clique.
         threshold = float(cfg["input"]["trigger_threshold"])

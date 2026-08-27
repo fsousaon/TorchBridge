@@ -1,6 +1,7 @@
-"""Valida a sublinha de pet actions (4 quadradinhos) no menu radial offscreen.
+"""Valida a sublinha de pet actions (4 quadradinhos com ícones) no menu radial offscreen.
 Desenha o overlay com a roda aberta no slot P + pet_submenu_open=True, confere os
-pixels dos quadradinhos na posição esperada e publica snapshots para o usuário.
+pixels dos quadradinhos (ícones + marcador dourado) e os pontos de clique do modo
+de calibração, e publica snapshots para o usuário.
 """
 import os
 import sys
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 app = QApplication.instance() or QApplication(sys.argv)
 
 from torchbridge.config import ConfigManager
-from torchbridge.models import Rect, SharedOverlayState
+from torchbridge.models import Rect, SharedOverlayState, pet_click_point
 from torchbridge.overlay import GameOverlay
 
 shared = SharedOverlayState()
@@ -20,10 +21,12 @@ cfg.reload()
 overlay = GameOverlay(shared, cfg)
 overlay.resize(1920, 1080)
 
+rect = Rect(0, 0, 1920, 1080)
+
 # 1) Roda aberta no slot P (seleção 5) com a sublinha ligada e marcador no 4º.
 shared.update(
     enabled=True, game_found=True, game_active=True,
-    game_rect=Rect(0, 0, 1920, 1080), radial_active=True, radial_selection=5,
+    game_rect=rect, radial_active=True, radial_selection=5,
     pet_submenu_open=True, pet_submenu_selection=4,
     aim_x=None, aim_y=None,
 )
@@ -38,32 +41,46 @@ img.save("pet_submenu_open.png")
 def sample(x, y):
     return img.toImage().pixelColor(x, y)
 
-# Centro do primeiro quadrado: (905 - 3*32, 715) = (809, 715).
+# Centro do primeiro quadrado: (905 - 3*32, 715) = (809, 715) — o ícone da espada.
 c1 = sample(809, 715)
-# Centro do quarto quadrado: eixo do nó (905, 715).
-c4 = sample(905, 715)
+# Cantinho interno do 4º quadrado (marcado): o FUNDO escuro dele (24,28,34).
+# O centro seria a moeda (ícone dourado), que também é clara — por isso o canto.
+c4 = sample(897, 710)
+# Fundo do quadrado 1 embaixo do ícone (809, 724): cinza claro dos não marcados.
+bg1 = sample(809, 724)
 # Entre o 1º (termina em 820) e o 2º (começa em 830): ~825, 715 NÃO pode ser quadrado.
 gap = sample(825, 715)
-# Bem acima da fileira (809, 690) não é quadrado.
-above = sample(809, 690)
 
-print("1o quadrado:", c1.name(), "| 4o quadrado:", c4.name(),
-      "| vão:", gap.name(), "| acima:", above.name())
-# O cinza do quadrado (216,219,224,242) é bem mais claro que o fundo/roda.
-assert c1.lightness() > 150, f"1o quadrado não é claro o bastante: {c1.name()}"
-assert c4.lightness() > 150, f"4o quadrado não é claro o bastante: {c4.name()}"
-assert gap.lightness() < c1.lightness() - 30, f"vão parece quadrado: {gap.name()}"
-# Marcador: o 4º quadrado tem borda dourada (255,202,82) e o 1º NÃO tem —
-# confere a borda de cada um (tope do quadrado, y = 704 + 1).
+print("1o centro (ícone):", c1.name(), "| 4o centro (ícone):", c4.name(),
+      "| fundo 1o:", bg1.name(), "| vão:", gap.name())
+# O fundo dos quadrados NÃO marcados continua claro; o do marcado é escuro.
+assert bg1.lightness() > 150, f"fundo do 1o quadrado não é claro: {bg1.name()}"
+assert gap.lightness() < 100, f"vão parece quadrado: {gap.name()}"
+# O centro do 4º (marcado) é o ícone sobre fundo escuro — bem mais escuro que o cinza.
+assert c4.lightness() < bg1.lightness() - 30, f"4o quadrado não mudou (fundo escuro esperado): {c4.name()}"
+
+# Marcador: o 4º quadrado tem borda dourada (255,202,82) e o 1º NÃO tem.
+# Com o antialiasing, a linha exata do pen varia 1-2px: escaneia a faixa do topo
+# do quadrado (y 700..708) e procura o pixel mais 'dourado' de cada um.
 def border(x, y):
     c = img.toImage().pixelColor(x, y)
     return c.red(), c.green(), c.blue()
 
-b4 = border(905, 705)  # topo do 4º quadrado (marcado)
-b1 = border(809, 705)  # topo do 1º quadrado (não marcado)
-print("borda 4o (marcada):", b4, "| borda 1o:", b1)
-assert b4[0] > 200 and b4[1] > 150 and b4[2] < 130, f"borda marcada não é dourada: {b4}"
-assert b1[2] >= 130 or b1[0] <= 200, f"1o quadrado com borda dourada por engano: {b1}"
+def most_gold(x, y0, y1):
+    best = None
+    for y in range(y0, y1):
+        r, g, b = border(x, y)
+        # Dourado: vermelho e verde altos, azul baixo.
+        score = r + g - 2 * b
+        if best is None or score > best[0]:
+            best = (score, (r, g, b), y)
+    return best  # (score, (r, g, b), y)
+
+g4 = most_gold(905, 700, 709)  # topo do 4º quadrado (marcado)
+g1 = most_gold(809, 700, 709)  # topo do 1º quadrado (não marcado)
+print("melhor dourado 4o:", g4, "| melhor do 1o:", g1)
+assert g4[1][0] > 200 and g4[1][1] > 150 and g4[1][2] < 130, f"borda marcada não é dourada: {g4}"
+assert not (g1[1][0] > 200 and g1[1][1] > 150 and g1[1][2] < 130), f"1o quadrado com borda dourada por engano: {g1}"
 
 # 3) Sublinha desligada (d-pad cima): os pixels viram fundo/roda de novo.
 shared.update(pet_submenu_open=False, pet_submenu_selection=None)
@@ -73,4 +90,18 @@ off = img2.toImage().pixelColor(809, 715)
 print("com sublinha fechada no mesmo ponto:", off.name())
 assert off.lightness() < 150, f"sublinha 'fechada' ainda clara: {off.name()}"
 
-print("PET SUBMENU OK: 4 quadradinhos desenhados sob o slot P, somem ao desligar")
+# 4) Modo de calibração: os 4 pontos de clique (pet_click_point) aparecem como
+# bolinhas vermelhas com cruz na caixinha do pet — confere o pixel de cada um.
+shared.update(radial_active=False, radial_selection=None)
+img3 = overlay.grab()
+img3.save("pet_calibration.png")
+for index in (1, 2, 3, 4):
+    px, py = pet_click_point(rect, index)
+    c = img3.toImage().pixelColor(px, py)
+    print(f"ponto {index} em ({px}, {py}):", c.name())
+    # O traço da cruz passa exatamente pelo centro: vermelho forte.
+    assert c.red() > 200 and c.green() < 120 and c.blue() < 120, \
+        f"ponto {index} não tem o traço vermelho no centro: {c.name()}"
+
+print("PET SUBMENU OK: 4 quadradinhos com ícones sob o slot P, somem ao desligar; "
+      "pontos de clique do calibração presentes")

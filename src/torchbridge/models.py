@@ -308,6 +308,32 @@ def pet_actions_asset_path() -> Path | None:
     return base / "assets" / "hud" / PET_ACTIONS_ASSET
 
 
+# Alvos de clique das 4 ações do pet (coordenadas no viewBox 156x201 do Pet-actions.svg):
+# centro de cada botão. Ordem = a dos quadradinhos da sublinha: 1 = círculo vermelho
+# (agressivo), 2 = azul (defensivo), 3 = branco (passivo), 4 = quadrado amarelo
+# (vendedor, centro do rect x=109 y=7 32x32). Não há tecla de teclado para essas ações
+# — o motor leva o mouse até o ponto, clica e devolve ao centro.
+PET_CLICK_TARGETS = (
+    (42.5, 181.5),  # 1 — agressivo (círculo vermelho)
+    (75.5, 181.5),  # 2 — defensivo (círculo azul)
+    (108.5, 181.5),  # 3 — passivo (círculo branco)
+    (125.0, 23.0),  # 4 — vendedor (quadrado amarelo)
+)
+
+
+# Ponto de clique na tela (px absolutos) para o quadrado `index` (1..4): o centro do
+# botão no viewBox do SVG projetado na caixinha calibrada (pet_actions_target_rect).
+# Escala com a janela junto com a caixinha — o ajuste fino da calibração se propaga.
+def pet_click_point(rect: Rect, index: int) -> tuple[int, int]:
+    if not 1 <= index <= len(PET_CLICK_TARGETS):
+        raise ValueError(f"Índice do botão do pet fora do intervalo: {index}")
+    svg_x, svg_y = PET_CLICK_TARGETS[index - 1]
+    left, top, width, height = pet_actions_target_rect(rect)
+    x = left + svg_x / 156.0 * width
+    y = top + svg_y / 201.0 * height
+    return (int(round(x)), int(round(y)))
+
+
 # Botão de fechar (X) do painel: a forma que o JOGO hit-testa é uma aba com base
 # RETA na borda interna do painel e ponta em seta voltada para o interior do
 # painel (painel esquerdo aponta à esquerda; direito é o espelho). A forma exata

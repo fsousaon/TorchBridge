@@ -24,6 +24,7 @@ from .models import (
     panels_x_shift,
     pet_actions_asset_path,
     pet_actions_target_rect,
+    pet_click_point,
 )
 from .win32 import make_overlay_clickthrough
 
@@ -292,28 +293,48 @@ class GameOverlay(QWidget):
         # Devolve transformações de estado (opacidade/translate/scale) ao desenhista.
         painter.restore()
 
-    # Quatro quadradinhos cinza da sublinha de pet actions, embaixo do nó de slot selecionado.
+    # Ícones dos quadradinhos da sublinha de pet (ordem 1..4 = agressivo/defensivo/
+    # passivo/vendedor). Mesmos PNGs de assets/images/radial-menu-icons (31x31, fundo
+    # transparente), carregados uma vez e em cache.
+    PET_SUBMENU_ICONS = ("pet-agressive", "pet-defensive", "pet-passive", "pet-seller")
+
+    # Ícone de uma ação do pet: carrega do disco uma única vez (cache do radial);
+    # None se o PNG não existir — o quadrado volta ao cinza simples.
+    def _pet_icon(self, name: str) -> QPixmap | None:
+        return self._radial_icon(name, False)
+
+    # Quatro quadradinhos da sublinha de pet actions, embaixo do nó de slot selecionado.
     # Layout (escala da roda, referência 1080p): lado = 22px, vão entre eles = 10px, topo da
     # fileira = 50px abaixo do centro do nó (o ícone ocupa ~33px, sobra ~17px de respiro).
     # A fileira NÃO é centralizada: o 4º quadrado fica alinhado no eixo horizontal do nó
     # (direto embaixo do ícone do slot P) — start_x é derivado pra que o centro do quadrado
-    # i=3 caia exatamente em point.x(). O quadrado `selection` (1..4) recebe o marcador:
-    # borda mais grossa na cor dourada da roda selecionada (255, 202, 82).
+    # i=3 caia exatamente em point.x(). Cada quadrado desenha o ícone da ação correspondente
+    # (1=espada/agressivo, 2=escudo/defensivo, 3=pássaro/passivo, 4=moeda/vendedor) e o
+    # quadrado `selection` (1..4) recebe o marcador: borda mais grossa na cor dourada da
+    # roda selecionada (255, 202, 82).
     def _draw_pet_submenu(self, painter: QPainter, point: QPointF, scale: float, selection: int | None) -> None:
         side = 22 * scale
         gap = 10 * scale
         top = point.y() + 50 * scale
         start_x = point.x() - (3 * (side + gap) + side / 2.0)
+        # O ícone (31x31) entra no quadrado (22px) com leve respiro: 78% do lado.
+        icon_size = side * 0.78
         for i in range(4):
             x = start_x + i * (side + gap)
             if selection is not None and i + 1 == selection:
                 # Marcador do quadrado ativo: dourado, igual à cor do nó selecionado da roda.
                 painter.setPen(QPen(QColor(255, 202, 82, 255), 3.0 * scale))
-                painter.setBrush(QColor(255, 202, 82, 70))
+                painter.setBrush(QColor(24, 28, 34, 235))
             else:
                 painter.setPen(QPen(QColor(232, 234, 238, 235), 2.0 * scale))
                 painter.setBrush(QColor(216, 219, 224, 242))
             painter.drawRect(QRectF(x, top, side, side))
+            # Ícone da ação centralizado no quadrado (fallback: sem PNG, só o quadrado).
+            pixmap = self._pet_icon(self.PET_SUBMENU_ICONS[i])
+            if pixmap is not None:
+                ox = x + (side - icon_size) / 2.0
+                oy = top + (side - icon_size) / 2.0
+                painter.drawPixmap(QRectF(ox, oy, icon_size, icon_size), pixmap, QRectF(pixmap.rect()))
 
     # Badge superior direito com o modo atual (DIRETO/CURSOR).
     def _draw_mode_badge(self, painter: QPainter, snapshot: OverlaySnapshot, scale: float) -> None:
@@ -422,6 +443,26 @@ class GameOverlay(QWidget):
                 self._pet_actions_pixmap,
             )
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+            # Pontos de clique das 4 ações do pet: bolinha vermelha com cruz no centro
+            # EXATO de cada botão (pet_click_point — a mesma fonte do motor). É ali que
+            # o cursor vai quando o A confirma; calibrar a caixinha acima move os pontos.
+            # Contorno branco por baixo: sem ele, o traço vermelho some no círculo vermelho.
+            radius = 7.0 * scale
+            pens = (
+                QPen(QColor(255, 255, 255, 255), 4.5 * scale),
+                QPen(QColor(255, 80, 80, 255), 2.0 * scale),
+            )
+            for index in range(1, 5):
+                px, py = pet_click_point(rect, index)
+                # Absolute -> local do overlay.
+                lx = px - rect.left
+                ly = py - rect.top
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                for pen in pens:
+                    painter.setPen(pen)
+                    painter.drawEllipse(QPointF(lx, ly), radius, radius)
+                    painter.drawLine(QPointF(lx - radius - 3 * scale, ly), QPointF(lx + radius + 3 * scale, ly))
+                    painter.drawLine(QPointF(lx, ly - radius - 3 * scale), QPointF(lx, ly + radius + 3 * scale))
         # Rótulos: o que cada zona faz (posicionados na bounding box da aba).
         painter.setFont(self._font(max(7, round(9 * scale)), True))
         painter.setPen(QColor(255, 159, 67, 245))
