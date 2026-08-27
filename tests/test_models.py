@@ -204,24 +204,24 @@ class CloseTabShapeTests(unittest.TestCase):
 
 
 class HudMaskGeometryTests(unittest.TestCase):
-    # hud_target_rect: em 1080p padrão, HUD centralizada na base, 942*1.08 x 137*1.05
+    # hud_target_rect: em 1080p padrão, HUD centralizada na base, 942*1.07 x 137*1.06
     # (SVG ampliado; largura escala com a ALTURA da janela, como os painéis).
     def test_target_rect_1080p(self):
         rect = Rect(0, 0, 1920, 1080)
         left, top, width, height = hud_target_rect(rect)
-        self.assertAlmostEqual(width, 942.0 * 1.08, places=3)   # 1017.36
-        self.assertAlmostEqual(height, 137.0 * 1.05, places=3)  # 143.85
+        self.assertAlmostEqual(width, 942.0 * 1.07, places=3)   # 1007.94
+        self.assertAlmostEqual(height, 137.0 * 1.06, places=3)  # 145.22
         # 1080p: centro em 1920*0.501525 e base em 1080*0.996293 → nudge de ~3px
         # à direita e ~8px para cima em relação à posição original (0.5 / 1.0).
-        self.assertAlmostEqual(left, 1920.0 * 0.501525 - 942.0 * 1.08 / 2.0, places=3)  # 454.248
-        self.assertAlmostEqual(top, 1080.0 * 0.996293 - 137.0 * 1.05, places=3)          # 932.15
+        self.assertAlmostEqual(left, 1920.0 * 0.501525 - 942.0 * 1.07 / 2.0, places=3)  # 458.958
+        self.assertAlmostEqual(top, 1080.0 * 0.996293 - 137.0 * 1.06, places=3)          # 930.78
 
     # Janela deslocada: a HUD acompanha o retângulo (não a origem).
     def test_target_rect_offset(self):
         rect = Rect(100, 50, 1920, 1080)
         left, top, width, height = hud_target_rect(rect)
-        self.assertAlmostEqual(left, 100 + 1920.0 * 0.501525 - 942.0 * 1.08 / 2.0, places=3)
-        self.assertAlmostEqual(top, 50 + 1080.0 * 0.996293 - 137.0 * 1.05, places=3)
+        self.assertAlmostEqual(left, 100 + 1920.0 * 0.501525 - 942.0 * 1.07 / 2.0, places=3)
+        self.assertAlmostEqual(top, 50 + 1080.0 * 0.996293 - 137.0 * 1.06, places=3)
 
     # hud_mask_hit: sem máscara → sempre False (comportamento antigo preservado).
     def test_no_mask_never_hits(self):
@@ -236,11 +236,11 @@ class HudMaskGeometryTests(unittest.TestCase):
         data = [0, 1, 0, 0]
         mask = (rows, cols, list(data))
         rect = Rect(0, 0, 1920, 1080)
-        # hud_target_rect(1080p) = (454.248, 932.15, 1017.36, 143.85). Canto sup-dir da HUD
+        # hud_target_rect(1080p) = (458.958, 930.78, 1007.94, 145.22). Canto sup-dir da HUD
         # cai em px=1, py=0 → data[0*2+1] = 1.
-        self.assertTrue(hud_mask_hit(mask, rect, 454.248 + 1017.36 / 2 + 1, 932.15 + 71.9 - 1))
+        self.assertTrue(hud_mask_hit(mask, rect, 458.958 + 1007.94 / 2 + 1, 930.78 + 72.61 - 1))
         # Canto sup-esq → data[0] = 0.
-        self.assertFalse(hud_mask_hit(mask, rect, 454.248 + 10, 932.15 + 10))
+        self.assertFalse(hud_mask_hit(mask, rect, 458.958 + 10, 930.78 + 10))
         # Fora da região da HUD → False.
         self.assertFalse(hud_mask_hit(mask, rect, 960, 540))
 

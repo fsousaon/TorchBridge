@@ -132,10 +132,10 @@ CLOSE_TAB_ANCHOR_FRACTION_OF_HEIGHT = 7 / 15
 # Ajuste fino: rode com show_calibration e veja a silhueta verde alinhada com a HUD real.
 HUD_ASSET = "hud-click-no-reset-variable.svg"
 HUD_REF_HEIGHT = 1080.0    # altura da tela em que o SVG foi desenhado
-# Calibração ago/2026: SVG 942x137 ampliado +8% de largura e +5% de altura em relação
+# Calibração ago/2026: SVG 942x137 ampliado +7% de largura e +6% de altura em relação
 # ao desenho (a área interativa real do jogo é um pouco maior que a silhueta do SVG).
-HUD_WIDTH_FRACTION_OF_HEIGHT = 942.0 * 1.08 / 1080.0  # largura da HUD = fração da ALTURA
-HUD_HEIGHT_FRACTION = 137.0 * 1.05 / 1080.0           # altura da HUD = fração da altura
+HUD_WIDTH_FRACTION_OF_HEIGHT = 942.0 * 1.07 / 1080.0  # largura da HUD = fração da ALTURA
+HUD_HEIGHT_FRACTION = 137.0 * 1.06 / 1080.0           # altura da HUD = fração da altura
 HUD_CENTER_FRACTION = 0.501525           # centro horizontal (~3px à direita do miolo em 1080p)
 HUD_BOTTOM_FRACTION = 0.996293           # base da HUD (~6px acima do rodapé em 1080p)
 
