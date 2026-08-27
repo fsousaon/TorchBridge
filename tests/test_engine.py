@@ -499,18 +499,75 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertEqual(shared.get().radial_selection, 6)
             self.assertFalse(shared.get().pet_submenu_open)
 
-    # Soltar LB (confirma o slot P) esconde a sublinha: roda fechada = sublinha inexistente.
-    def test_releasing_lb_hides_submenu_and_confirms_slot(self):
+    # Soltar LB fecha a roda SEM disparar nada (confirmação é do A): sublinha aberta,
+    # soltar LB = desistência pura.
+    def test_releasing_lb_closes_without_firing(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, shared = self._engine(directory)
             self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
             self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
             self.assertTrue(shared.get().pet_submenu_open)
-            # Solta LB no setor P: dispara o atalho 'P' e esconde a sublinha.
+            # Solta LB no setor P com a sublinha aberta: fecha tudo, NÃO dispara o atalho.
             self._tick(engine, directory, self._state(rx=-0.6, ry=0.8))
-            self.assertIn("P", engine.injector.tapped)
+            self.assertNotIn("P", engine.injector.tapped)
             self.assertFalse(shared.get().pet_submenu_open)
             self.assertFalse(shared.get().radial_active)
+
+    # Botão A com a roda aberta (sem sublinha) confirma: dispara o atalho do setor,
+    # alterna o painel e fecha a roda — com o LB AINDA segurado (latch).
+    def test_a_confirms_slot_and_closes_wheel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            # Setor 1 (topo) = I: rx=0, ry negativo.
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
+            self.assertEqual(shared.get().radial_selection, 1)
+            # A com o LB ainda segurado: confirma o I.
+            self._tick(engine, directory, self._state(("lb", "a"), rx=0.0, ry=-0.6))
+            self.assertIn("I", engine.injector.tapped)
+            self.assertIn("I", shared.get().active_panels)
+            # Roda fechou (latch) mesmo com o LB pressionado.
+            self.assertFalse(shared.get().radial_active)
+            self.assertIsNone(shared.get().radial_selection)
+            # E o toque de tecla do A ("1") NÃO disparou junto.
+            self.assertNotIn("1", engine.injector.tapped)
+
+    # A com a sublinha ABERTA: fecha a sublinha E a roda, sem disparar o atalho do P.
+    def test_a_with_submenu_closes_wheel_without_firing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(shared.get().pet_submenu_open)
+            self._tick(engine, directory, self._state(("lb", "a"), rx=-0.6, ry=0.8))
+            self.assertNotIn("P", engine.injector.tapped)
+            self.assertFalse(shared.get().pet_submenu_open)
+            self.assertFalse(shared.get().radial_active)
+            self.assertNotIn("1", engine.injector.tapped)
+
+    # A com a roda aberta NÃO dispara a tecla padrão do A ("1"): o toque é da confirmação.
+    def test_a_key_tap_suppressed_when_wheel_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _ = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
+            self._tick(engine, directory, self._state(("lb", "a"), rx=0.0, ry=-0.6))
+            self.assertNotIn("1", engine.injector.tapped)
+
+    # Após confirmar com o A (roda fechada via latch, LB ainda segurado), o stick NÃO
+    # ressuscita a seleção; soltar o LB e apertar de novo reabre a roda do zero.
+    def test_wheel_stays_closed_while_lb_held_after_confirm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared = self._engine(directory)
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
+            self._tick(engine, directory, self._state(("lb", "a"), rx=0.0, ry=-0.6))
+            # LB continua segurado apontando no setor I: roda segue fechada, sem seleção.
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
+            self.assertFalse(shared.get().radial_active)
+            self.assertIsNone(shared.get().radial_selection)
+            # Solta e aperta de novo: reabre normalmente.
+            self._tick(engine, directory, self._state(rx=0.0, ry=-0.6))
+            self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
+            self.assertTrue(shared.get().radial_active)
+            self.assertEqual(shared.get().radial_selection, 1)
 
     # Reabrir a roda no P depois de fechada: a sublinha começa FECHADA (nada gruda).
     def test_reopening_pet_starts_closed(self):

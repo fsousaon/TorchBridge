@@ -73,6 +73,10 @@ class BridgeEngine(threading.Thread):
         # Estado do combo Back+Start (calibração): visto?, desde quando?, já disparou?
         # Setor da roda selecionado enquanto LB estiver segurado.
         self._radial_selection: int | None = None
+        # Latch de "roda confirmada pelo A": o jogador aperta A com o polegar esquerdo
+        # ainda segurando o LB, então a roda precisa ficar fechada mesmo com o LB
+        # pressionado. Rearma na borda de subida do LB (próximo aperto reabre).
+        self._radial_dismissed: bool = False
         # Toggle interno da sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad
         # para BAIXO abre, para CIMA fecha. Desmarca o setor 'P' ou fecha a roda: a sublinha
         # some automaticamente (estado interno volta a False).
@@ -102,6 +106,7 @@ class BridgeEngine(threading.Thread):
     def _reset_radial_session(self) -> None:
         self._reset_active_panels()
         self._radial_selection = None
+        self._radial_dismissed = False
         self.shared.update(radial_selection=None)
 
     # Pede a parada; a thread encerra no próximo ciclo.
@@ -164,6 +169,8 @@ class BridgeEngine(threading.Thread):
         # A roda fechou (interrupção): a sublinha de pet actions não pode sobreviver aberta.
         self._pet_submenu = False
         self._pet_submenu_selection = PET_SUBMENU_DEFAULT
+        # O latch de confirmação pelo A também não pode sobreviver à interrupção.
+        self._radial_dismissed = False
         self.shared.update(
             radial_active=False,
             radial_selection=None,
@@ -268,7 +275,10 @@ class BridgeEngine(threading.Thread):
         state: ControllerState,
         bindings: dict[str, Any],
     ) -> None:
-        radial_open = state.pressed("lb")
+        # Roda aberta: o d-pad é da sublinha de pet e o botão A confirma a seleção —
+        # nenhum dos dois dispara o toque de tecla enquanto a roda estiver de pé.
+        # (O latch _radial_dismissed fecha a roda com o LB ainda segurado após o A.)
+        radial_open = state.pressed("lb") and not self._radial_dismissed
         for button in (
             "a",
             "b",
@@ -280,14 +290,15 @@ class BridgeEngine(threading.Thread):
             "dpad_left",
             "r3",
         ):
-            # Roda aberta: o d-pad é da sublinha de pet, não do jogo — pula o toque.
-            if radial_open and button.startswith("dpad_"):
+            # Com a roda aberta: d-pad inteiro é da sublinha e A confirma a roda.
+            if radial_open and (button.startswith("dpad_") or button == "a"):
                 continue
             # Borda de subida: um toque por pressionamento, sem auto-repeat.
             if state.pressed(button) and not self._previous.pressed(button):
                 self._tap_binding(bindings.get(button))
 
-    # Roda de habilidades: LB + analógico direito escolhe o setor; soltar LB dispara o atalho.
+    # Roda de habilidades: LB + analógico direito escolhe o setor; A confirma o atalho e
+    # soltar LB só fecha a roda (a confirmação saiu do soltar em ago/2026).
     def _handle_radial(
         self,
         hub: ControllerHub,
@@ -296,25 +307,32 @@ class BridgeEngine(threading.Thread):
     ) -> None:
         active = state.pressed("lb")
         slots = bindings.get("radial_slots", [])
-        # Sem LB não há seleção; radial_slot devolve 1..N (N = slots do perfil) com inclinação mínima.
-        selection = radial_slot(state.rx, state.ry, len(slots)) if active else None
-        # Setor mudou: atualiza a seleção e vibra para dar retorno tátil.
-        if active and selection is not None and selection != self._radial_selection:
+        # Borda de subida do LB: rearma o latch — o próximo aperto reabre a roda do zero.
+        if not self._previous.pressed("lb") and active:
+            self._radial_dismissed = False
+        # Roda de pé: LB segurado E sem latch de confirmação pelo A (apertar A com o LB
+        # ainda segurado mantém a roda fechada até soltar o LB).
+        open = active and not self._radial_dismissed
+        # Sem LB (ou roda confirmada) não há seleção; radial_slot devolve 1..N (N = slots
+        # do perfil) com inclinação mínima.
+        selection = radial_slot(state.rx, state.ry, len(slots)) if open else None
+        # Setor mudou (roda de pé): atualiza a seleção e vibra para dar retorno tátil.
+        if open and selection is not None and selection != self._radial_selection:
             self._radial_selection = selection
             hub.rumble(0.04, 0.10, 35)
         # A sublinha acompanha a seleção PERSISTIDA (self._radial_selection), não a
         # seleção instantânea do analógico: assim, com a alavanca de volta ao centro
         # (radial_slot devolve None), o setor segue o último que o analogo apontou — e o
         # d-pad BAIXO abre o submenu sem precisar manter o stick inclinado.
-        current = self._radial_selection if active else None
+        current = self._radial_selection if open else None
         # Sublinha de pet actions (4 quadradinhos sob o slot 'P'): d-pad PARA BAIXO abre,
         # para CIMA fecha — enquanto a roda está aberta e o setor do pet é o selecionado.
         # Vibra só na transição real (abriu ou fechou).
         if current is not None:
             current_slot = slots[current - 1] if 1 <= current <= len(slots) else ""
-            if pet_submenu_open(active, current, current_slot, True):
+            if pet_submenu_open(open, current, current_slot, True):
                 # Setor do pet selecionado: o d-pad inteiro é da sublinha (os toques de
-                # tecla já são suprimidos em _handle_discrete_bindings pelo LB segurado).
+                # tecla já são suprimidos em _handle_discrete_bindings com a roda de pé).
                 if state.pressed("dpad_down") and not self._previous.pressed("dpad_down"):
                     if not self._pet_submenu:
                         self._pet_submenu = True
@@ -344,10 +362,19 @@ class BridgeEngine(threading.Thread):
             # Roda fechada: a sublinha não existe mais.
             self._pet_submenu = False
 
-        # LB liberado: confirma a escolha — dispara o slot selecionado, se mapeado.
-        if self._previous.pressed("lb") and not active:
-            # Só dispara se o setor tiver slot definido no perfil (1..N).
-            if self._radial_selection is not None and self._radial_selection <= len(slots):
+        # Confirmação da roda é do botão A — PS cross / Xbox A / genérico A / Nintendo A
+        # chegam todos normalizados como "a" (mapeamento SDL), um caminho cobre as
+        # famílias. Com a sublinha aberta: A fecha a sublinha E a roda (a ação do
+        # quadrado marcado é da próxima fase, quando as 4 ações do pet forem mapeadas).
+        # Sem sublinha: dispara o atalho do setor (o papel do antigo "soltar LB").
+        if (
+            open
+            and state.pressed("a")
+            and not self._previous.pressed("a")
+            and self._radial_selection is not None
+            and self._radial_selection <= len(slots)
+        ):
+            if not self._pet_submenu:
                 slot = slots[self._radial_selection - 1]
                 self._tap_binding(slot)
                 # O atalho também alterna o rastreador de painéis mostrado no overlay.
@@ -355,14 +382,27 @@ class BridgeEngine(threading.Thread):
                 if next_panels != self._active_panels:
                     self._active_panels = next_panels
                     self.shared.update(active_panels=list(next_panels))
+            self._pet_submenu = False
+            self._pet_submenu_selection = PET_SUBMENU_DEFAULT
             self._radial_selection = None
+            self._radial_dismissed = True
+            hub.rumble(0.06, 0.12, 50)
+
+        # LB liberado: fecha a roda (SÓ fecha — a confirmação de slot/marcação é do botão A).
+        if self._previous.pressed("lb") and not active:
+            self._radial_selection = None
+            self._radial_dismissed = False
+
+        # O A pode ter armado o latch no meio deste tick: recomputa para a publicação
+        # já fechar a roda agora (senão ela só sumiria no tick seguinte).
+        open = active and not self._radial_dismissed
 
         self.shared.update(
-            radial_active=active,
-            radial_selection=self._radial_selection if active else None,
+            radial_active=open,
+            radial_selection=self._radial_selection if open else None,
             pet_submenu_open=pet_submenu_open(
-                active,
-                self._radial_selection if active else None,
+                open,
+                self._radial_selection if open else None,
                 slots[self._radial_selection - 1]
                 if self._radial_selection is not None and 1 <= self._radial_selection <= len(slots)
                 else "",
@@ -372,8 +412,8 @@ class BridgeEngine(threading.Thread):
             pet_submenu_selection=(
                 self._pet_submenu_selection
                 if pet_submenu_open(
-                    active,
-                    self._radial_selection if active else None,
+                    open,
+                    self._radial_selection if open else None,
                     slots[self._radial_selection - 1]
                     if self._radial_selection is not None and 1 <= self._radial_selection <= len(slots)
                     else "",
