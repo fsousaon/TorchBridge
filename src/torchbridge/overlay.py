@@ -393,13 +393,15 @@ class GameOverlay(QWidget):
         center_y = top + side / 2.0
         # O ícone (31x31) entra no círculo com leve respiro: 78% do diâmetro.
         icon_size = side * 0.78
-        # Clip: a sublinha só é visível ABAIXO da base do ícone da opção P — é assim
-        # que as bolinhas "saem de dentro da opção": enquanto a diagonal ainda está
-        # atrás do ícone, o clip as segura; nada vaza por cima. O ícone P desenha com
-        # ~66px de altura (86x71 em 80px de largura), então 44px abaixo do centro
-        # fica folga de sobra por baixo dele e segura a sublinha toda (fileira
-        # termina a 72px abaixo).
-        clip_top = point.y() + 44 * scale
+        # Clip: a sublinha é visível num retângulo de ALTURA DOBRADA em relação ao
+        # antigo (~118px em 1080p: do ponto.y() - 24 até o fim da fileira). O topo
+        # fica 2px ACIMA do topo da bolinha parada no centro do nó (raio 22) — assim
+        # a bolinha já nasce INTEIRA, sem a fatia/achatamento que o clip antigo
+        # (point.y() + 44) causava quando as bolinhas entravam (bug visto no jogo,
+        # ago/2026: "as bolinhas entram cortadas"). Como o desenho da sublinha
+        # acontece DEPOIS dos nós/ícones, a bolinha voa POR CIMA do ícone da opção P
+        # saindo dele redonda — é isso que vende o "sair de dentro do menu".
+        clip_top = point.y() - 24 * scale
         clip_bottom = top + side + 8 * scale
         painter.save()
         painter.setClipRect(QRectF(point.x() - 220 * scale, clip_top, 440 * scale, clip_bottom - clip_top))

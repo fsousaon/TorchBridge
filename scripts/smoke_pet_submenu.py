@@ -91,9 +91,10 @@ assert g4[1][0] > 200 and g4[1][1] > 150 and g4[1][2] < 130, f"borda marcada nã
 assert not (g1[1][0] > 200 and g1[1][1] > 150 and g1[1][2] < 130), f"1o círculo com borda dourada por engano: {g1}"
 
 # 3) Animação de ENTRADA — progress 0: todas as bolinhas estão no CENTRO do nó P
-# (905, 654), atrás do ícone — o clip (que começa em 654+44 = 698) as segura e nada
-# vaza. Confere apenas abaixo da linha do clip (698..751): acima disso mora o próprio
-# ícone P, que é brilhante e legítimo.
+# (905, 654), INTEIRAS (o clip agora começa em 654-24 = 630, acima do topo delas) —
+# elas voam POR CIMA do ícone P, saindo dele redondas, sem fatia. A base da bolinha
+# fica em 654+22 = 676, acima da região conferida (698..751): lá embaixo não pode
+# ter nada. Acima disso mora o próprio nó P (brilhante e legítimo) + a bolinha 20%.
 overlay._pet_submenu_progress = 0.0
 img_in0 = overlay.grab()
 img_in0.save("pet_submenu_anim_in0.png")
