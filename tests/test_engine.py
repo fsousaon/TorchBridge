@@ -281,19 +281,19 @@ class CenterClickPanelResetTests(unittest.TestCase):
         engine.injector = injector
         return engine, shared, injector
 
-    def _tick(self, engine: BridgeEngine, rt: float, directory: str) -> FakeInjector:
+    def _tick(self, engine: BridgeEngine, a: bool, directory: str) -> FakeInjector:
         cfg = engine.config.get()
         rect = Rect(0, 0, 1920, 1080)
-        state = ControllerState(connected=True, rt=rt)
+        state = ControllerState(connected=True, buttons=frozenset({"a"} if a else ()))
         engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
         return engine.injector  # type: ignore[return-value]
 
-    # Clique esquerdo (RT) na zona central com os dois painéis 'abertos' no estado: o jogo
-    # fechou o menu, então o estado é esvaziado — o terceiro caminho de sincronização.
+    # Clique esquerdo (botão A) na zona central com os dois painéis 'abertos' no estado:
+    # o jogo fechou o menu, então o estado é esvaziado — o terceiro caminho de sincronização.
     def test_center_click_resets_panels(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, shared, _ = self._make_engine(directory, cursor=(960, 540))
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["", ""])
             self.assertEqual(shared.get().active_panels, ["", ""])
 
@@ -302,7 +302,7 @@ class CenterClickPanelResetTests(unittest.TestCase):
     def test_panel_click_keeps_panels(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, _, _ = self._make_engine(directory, cursor=(100, 100))
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["C", "I"])
 
     # Clique na aba de fechar ESQUERDA: fecha só o painel esquerdo, o direito permanece.
@@ -310,7 +310,7 @@ class CenterClickPanelResetTests(unittest.TestCase):
     def test_close_left_box_closes_only_left(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, shared, _ = self._make_engine(directory, cursor=(490, 318))
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["", "I"])
             self.assertEqual(shared.get().active_panels, ["", "I"])
 
@@ -319,7 +319,7 @@ class CenterClickPanelResetTests(unittest.TestCase):
     def test_close_right_box_closes_only_right(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, _, _ = self._make_engine(directory, cursor=(1430, 318))
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["C", ""])
 
     # Clique na aba de fechar sem o correspondente painel aberto: nada muda.
@@ -327,7 +327,7 @@ class CenterClickPanelResetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             engine, _, _ = self._make_engine(directory, cursor=(490, 318))
             engine._active_panels = ["", "I"]
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["", "I"])
 
     # Clique retido (sem nova borda de subida) não dispara o reset de novo: só o primeiro toque conta.
@@ -335,12 +335,12 @@ class CenterClickPanelResetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             engine, _, injector = self._make_engine(directory, cursor=(960, 540))
             # Primeiro toque no centro: reseta (estado já fica limpo).
-            self._tick(engine, rt=1.0, directory=directory)
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["", ""])
             # Simula um painel aberto de novo durante o clique ainda retido...
             engine._active_panels = ["I", ""]
-            # ...e continua segurando RT no centro: sem borda, o estado NÃO é tocado.
-            self._tick(engine, rt=1.0, directory=directory)
+            # ...e continua segurando o A no centro: sem borda, o estado NÃO é tocado.
+            self._tick(engine, a=True, directory=directory)
             self.assertEqual(engine._active_panels, ["I", ""])
             self.assertTrue(injector.buttons.get("left", False))
 
@@ -377,7 +377,7 @@ class HudClickPanelResetTests(unittest.TestCase):
     def _tick(self, engine: BridgeEngine) -> None:
         cfg = engine.config.get()
         rect = Rect(0, 0, 1920, 1080)
-        state = ControllerState(connected=True, rt=1.0)
+        state = ControllerState(connected=True, buttons=frozenset({"a"}))
         engine._process_active(FakeHub(), state, rect, cfg, 0.0, 0.05)
 
     # 1080p: barra de vida no centro da base (960, 1070) é verde no SVG → zona "hud".
@@ -961,3 +961,105 @@ class PetClickSequenceTests(unittest.TestCase):
             ups = [i for i, e in enumerate(engine.injector.events) if e == ("mouse", "left", False)]
             self.assertEqual(len(ups), 2)
             self.assertIsNone(engine._pet_click_seq)
+
+
+class FaceButtonsMouseTests(unittest.TestCase):
+    # A/X viraram os botões do mouse (ago/2026): A = clique ESQUERDO, X = clique
+    # DIREITO. As três famílias (cruz/A/A-nintendo e quadrado/X/X-nintendo) chegam
+    # já normalizadas como "a"/"x" pelo SDL (BUTTONS em controller.py), então os
+    # testes usam os nomes lógicos. Enquanto LB está segurado (roda de atalhos)
+    # nenhum dos dois pode vazar clique de mouse no jogo.
+
+    @staticmethod
+    def _state(buttons: tuple[str, ...] = (), **kw) -> ControllerState:
+        return ControllerState(connected=True, buttons=frozenset(buttons), **kw)
+
+    def _engine(self, directory: str) -> tuple[BridgeEngine, SharedOverlayState, FakeInjector]:
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        engine._active_panels = ["", ""]
+        injector = FakeInjector()
+        injector.cursor = (960, 540)  # centro da janela: zona "center"
+        engine.injector = injector
+        return engine, shared, injector
+
+    def _tick(self, engine: BridgeEngine, state: ControllerState, now: float = 0.0) -> None:
+        cfg = engine.config.get()
+        rect = Rect(0, 0, 1920, 1080)
+        engine._process_active(FakeHub(), state, rect, cfg, now, 0.05)
+        engine._previous = state
+
+    # A apertado: clique esquerdo retido; soltar A: libera (e nada do direito).
+    def test_a_maps_to_left_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("a",)))
+            self.assertTrue(injector.buttons.get("left", False))
+            self.assertFalse(injector.buttons.get("right", False))
+            self._tick(engine, self._state())
+            self.assertFalse(injector.buttons.get("left", False))
+
+    # X apertado: clique direito retido; soltar X: libera (e nada do esquerdo).
+    def test_x_maps_to_right_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("x",)))
+            self.assertTrue(injector.buttons.get("right", False))
+            self.assertFalse(injector.buttons.get("left", False))
+            self._tick(engine, self._state())
+            self.assertFalse(injector.buttons.get("right", False))
+
+    # R2/LT não clicam mais em nada (o mapeamento gatilho→mouse morreu junto com
+    # trigger_threshold).
+    def test_triggers_do_not_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            for rt, lt in ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0)):
+                self._tick(engine, self._state(rt=rt, lt=lt))
+            self.assertFalse(injector.buttons.get("left", False))
+            self.assertFalse(injector.buttons.get("right", False))
+
+    # A com a roda aberta no setor P: confirma o slot (tapa "P", abre o painel) e
+    # NÃO aperta o botão esquerdo do mouse.
+    def test_a_confirms_slot_without_left_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            # Setor P (slot 5, "P" = painel esquerdo): vetor rx=-0.6, ry=0.8.
+            self._tick(engine, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8))
+            self.assertEqual(injector.tapped, ["P"])
+            self.assertEqual(engine._active_panels, ["P", ""])
+            self.assertFalse(injector.buttons.get("left", False))
+            self.assertFalse(injector.buttons.get("right", False))
+
+    # A confirmando o quadrado do pet: o ÚNICO clique esquerdo é o da sequência no
+    # botão do pet — o botão esquerdo do cursor nunca é retido (LB ainda segurado
+    # na confirmação e a sequência injeta o clique direto, fora de _held_mouse).
+    def test_pet_confirm_does_not_leak_cursor_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("lb",), rx=-0.6, ry=0.8))
+            self._tick(engine, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
+            self.assertTrue(engine._pet_submenu)
+            events_before = len(injector.events)
+            # Confirma o quadrado com o A (t0=0,10).
+            self._tick(engine, self._state(("lb", "a"), rx=-0.6, ry=0.8), 0.10)
+            self.assertFalse(injector.buttons.get("left", False))
+            self.assertFalse(injector.buttons.get("right", False))
+            # Fase down (0,22..0,31) e fim (>= 0,40).
+            self._tick(engine, self._state(), 0.25)
+            self._tick(engine, self._state(), 0.41)
+            self.assertIsNone(engine._pet_click_seq)
+            downs = [i for i, e in enumerate(injector.events) if e == ("mouse", "left", True) and i >= events_before]
+            ups = [i for i, e in enumerate(injector.events) if e == ("mouse", "left", False) and i >= events_before]
+            self.assertEqual(len(downs), 1)
+            self.assertEqual(len(ups), 1)
+
+    # X com LB segurado: nenhum clique direito vaza.
+    def test_x_suppressed_while_lb_held(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("lb", "x"), rx=-0.6, ry=0.8))
+            self.assertFalse(injector.buttons.get("right", False))

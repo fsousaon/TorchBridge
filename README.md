@@ -64,12 +64,10 @@ Torchlight em modo janela ou janela sem bordas.
 | --- | --- |
 | Analógico esquerdo | Movimento direto; mantém o clique na direção escolhida |
 | Analógico direito | Mira e cursor |
-| RT / R2 | Clique esquerdo: atacar, mover, coletar e confirmar |
-| LT / L2 | Clique direito: habilidade secundária |
-| A / X inferior | Atalho 1 |
-| B / Círculo | Atalho 2 |
-| X / Quadrado | Atalho 3 |
-| Y / Triângulo | Atalho 4 |
+| A / Cruz (botão de baixo) | Clique esquerdo: atacar, mover, coletar e confirmar |
+| X / Quadrado (botão da esquerda) | Clique direito: habilidade secundária |
+| B / Círculo | Atalho 1 |
+| Y / Triângulo | Atalho 2 |
 | Direcional cima/direita/baixo/esquerda | Atalhos 5/6/7/8 |
 | Segurar LB / L1 + analógico direito | Roda de atalhos 1–6 |
 | RB / R1 | Segura Shift, para atacar sem avançar |
@@ -79,7 +77,8 @@ Torchlight em modo janela ou janela sem bordas.
 | Start / Options | Esc, menus e retorno |
 
 Na roda, a posição superior é o atalho 1 e as demais seguem no sentido horário.
-Soltar LB/L1 confirma a seleção. Uma vibração curta indica a troca de posição.
+O botão A confirma a seleção (com a roda aberta, A e X não geram clique de
+mouse no jogo). Uma vibração curta indica a troca de posição.
 
 As opções da roda também abrem os painéis do jogo: **C** e **P** no lado
 esquerdo da tela; **I**, **S**, **Q** e **J** no lado direito. Escolher a mesma
@@ -98,8 +97,9 @@ TorchBridge coloca o cursor em um raio ao redor do herói e mantém o clique
 esquerdo. Isso aproveita o próprio sistema de `click-to-move` do Torchlight e dá
 sensação de controle direto sem alterar o jogo.
 
-O analógico direito assume o cursor quando é movimentado. Use os gatilhos para
-atacar ou lançar uma habilidade na posição indicada.
+O analógico direito assume o cursor quando é movimentado. Use o botão A
+(clique esquerdo) para atacar e o X (clique direito) para lançar uma
+habilidade na posição indicada.
 
 Ao devolver o analógico esquerdo ao centro, o cursor volta automaticamente para
 a âncora do herói — o próximo `click-to-move` nasce no centro e não cai em cima
@@ -108,7 +108,7 @@ de um NPC ou inimigo.
 ### Cursor / menus
 
 Pressione Back/Create/Select para entrar no modo cursor. Os dois analógicos
-podem movimentar a seta e os gatilhos funcionam como os dois botões do mouse.
+podem movimentar a seta e A/X funcionam como os dois botões do mouse.
 Use esse modo no inventário, árvore de habilidades, lojas e diálogos. Pressione
 Back/Create/Select novamente para retornar ao movimento direto.
 
@@ -153,8 +153,7 @@ Os campos mais úteis são:
   "input": {
     "poll_hz": 120,
     "deadzone": 0.18,
-    "response_curve": 1.6,
-    "trigger_threshold": 0.32
+    "response_curve": 1.6
   },
   "movement": {
     "anchor_x": 0.5,

@@ -285,23 +285,23 @@ class BridgeEngine(threading.Thread):
             self._center_combo_started = None
             self._center_combo_triggered = False
 
-    # Botões de ação (face, direcional, R3): toque único na borda de subida.
-    # Com a roda de atalhos ABERTA (LB segurado) o d-pad inteiro fica sobrecarregado:
-    # ele controla a sublinha de pet actions (up/down) e NÃO dispara mais os toques de
-    # tecla configurados (o usuário está na roda, não no jogo).
+    # Botões de ação (face B/Y, direcional, R3): toque único na borda de subida.
+    # A e X SAÍRAM desta lista: são os cliques de mouse (esquerdo/direito) e não
+    # têm mais tecla associada. Com a roda de atalhos ABERTA (LB segurado) o d-pad
+    # inteiro fica sobrecarregado: ele controla a sublinha de pet actions (up/down)
+    # e NÃO dispara mais os toques de tecla configurados (o usuário está na roda,
+    # não no jogo).
     def _handle_discrete_bindings(
         self,
         state: ControllerState,
         bindings: dict[str, Any],
     ) -> None:
-        # Roda aberta: o d-pad é da sublinha de pet e o botão A confirma a seleção —
-        # nenhum dos dois dispara o toque de tecla enquanto a roda estiver de pé.
-        # (O latch _radial_dismissed fecha a roda com o LB ainda segurado após o A.)
+        # Roda aberta: o d-pad é da sublinha de pet e nenhum toque de tecla dispara
+        # enquanto a roda estiver de pé. (O latch _radial_dismissed fecha a roda com o
+        # LB ainda segurado após o A.)
         radial_open = state.pressed("lb") and not self._radial_dismissed
         for button in (
-            "a",
             "b",
-            "x",
             "y",
             "dpad_up",
             "dpad_right",
@@ -309,8 +309,8 @@ class BridgeEngine(threading.Thread):
             "dpad_left",
             "r3",
         ):
-            # Com a roda aberta: d-pad inteiro é da sublinha e A confirma a roda.
-            if radial_open and (button.startswith("dpad_") or button == "a"):
+            # Com a roda aberta: d-pad inteiro é da sublinha.
+            if radial_open and button.startswith("dpad_"):
                 continue
             # Borda de subida: um toque por pressionamento, sem auto-repeat.
             if state.pressed(button) and not self._previous.pressed(button):
@@ -692,13 +692,19 @@ class BridgeEngine(threading.Thread):
             # (click_zone fechando painéis) disparam no meio do hover/clique.
             return
         auto_move = self._move_pointer(state, rect, cfg, dt)
-        # Limiar do perfil: a partir de quanto o gatilho vira clique.
-        threshold = float(cfg["input"]["trigger_threshold"])
-        # Clique esquerdo: retido no movimento direto (click-to-move) ou com RT fundo.
-        left_pressed = auto_move or state.rt >= threshold
+        # Cliques de mouse vêm dos botões face: A = esquerdo, X = direito.
+        # Cruz (PS) / A (Xbox) / A (Nintendo) chegam normalizados como "a" e
+        # quadrado (PS) / X (Xbox) / X (Nintendo) como "x" (mapeamento do SDL —
+        # ver BUTTONS em controller.py): uma regra cobre as três famílias.
+        # Enquanto LB está segurado (roda de atalhos) os dois ficam inertes: o A
+        # confirma slot/sublinha lá dentro e nenhum toque pode vazar clique de
+        # mouse no jogo — inclusive depois da confirmação, quando o usuário
+        # ainda segura A/LB no fim da sequência do pet (sem isso o clique
+        # esquerdo grudaria e o herói seguiria o cursor).
+        radial_held = state.pressed("lb")
+        left_pressed = auto_move or (state.pressed("a") and not radial_held)
         self._set_mouse("left", left_pressed)
-        # Clique direito (habilidade secundária) com LT fundo.
-        self._set_mouse("right", state.lt >= threshold)
+        self._set_mouse("right", state.pressed("x") and not radial_held)
         # Borda de subida do clique esquerdo: sincroniza com o fechamento de menus do jogo
         # (mesma regra do ESC/Alt+F4). Botão do painel = fecha só aquele lado; zona central
         # com os dois abertos = fechou tudo.

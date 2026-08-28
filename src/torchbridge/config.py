@@ -25,7 +25,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "poll_hz": 120,
         "deadzone": 0.18,
         "response_curve": 1.6,
-        "trigger_threshold": 0.32,
     },
     # Movimento direto: âncora = centro do personagem em fração da janela; raio = alcance do cursor.
     # O raio é sempre uma fração da ALTURA da janela (mesmo valor nos eixos x e y → área circular).
@@ -54,9 +53,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     # Botões → teclas do Torchlight; radial_slots são os atalhos da roda (1..N, N = tamanho da lista).
     "bindings": {
-        "a": "1",
+        # A e X são os cliques de mouse (esquerdo/direito) — sem tecla associada.
+        "a": "",
         "b": "2",
-        "x": "3",
+        "x": "",
         "y": "4",
         "dpad_up": "5",
         "dpad_right": "6",
@@ -174,10 +174,6 @@ class ConfigManager:
         data["input"]["deadzone"] = clamp(float(data["input"]["deadzone"]), 0.02, 0.60)
         # Curva de resposta limitada a 0.2–4.0.
         data["input"]["response_curve"] = clamp(float(data["input"]["response_curve"]), 0.2, 4.0)
-        # Limiar dos gatilhos (quando viram clique) limitado a 5%–95%.
-        data["input"]["trigger_threshold"] = clamp(
-            float(data["input"]["trigger_threshold"]), 0.05, 0.95
-        )
         # Âncora do personagem limitada a 5%–95% da janela (nunca fora da tela).
         data["movement"]["anchor_x"] = clamp(float(data["movement"]["anchor_x"]), 0.05, 0.95)
         data["movement"]["anchor_y"] = clamp(float(data["movement"]["anchor_y"]), 0.05, 0.95)
