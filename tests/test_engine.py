@@ -1,4 +1,5 @@
 # Testes do BridgeEngine: reset do estado da roda na borda de detecção do jogo.
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -462,12 +463,13 @@ class PetSubmenuTests(unittest.TestCase):
             self._tick(engine, directory, self._state(("lb", "dpad_down"), rx=-0.6, ry=0.8))
             self.assertNotIn("7", engine.injector.tapped)
 
-    # Sem roda aberta o d-pad continua disparando a tecla configurada (comportamento antigo).
-    def test_dpad_tap_still_works_without_wheel(self):
+    # D-pad BAIXO com a roda fechada NÃO dispara nenhum toque: o d-pad está sem
+    # binding no overworld (o mapa antigo 5-8 morreu no remap — docs/REMAP-BOTOES).
+    def test_dpad_noop_without_wheel(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, _ = self._engine(directory)
             self._tick(engine, directory, self._state(("dpad_down",)))
-            self.assertIn("7", engine.injector.tapped)
+            self.assertEqual(engine.injector.tapped, [])
 
     # Com a roda aberta em OUTRO setor (C = 6), d-pad BAIXO NÃO abre a sublinha do pet.
     def test_dpad_down_on_other_sector_does_not_open(self):
@@ -543,8 +545,8 @@ class PetSubmenuTests(unittest.TestCase):
             # Roda fechou (latch) mesmo com o LB pressionado.
             self.assertFalse(shared.get().radial_active)
             self.assertIsNone(shared.get().radial_selection)
-            # E o toque de tecla do A ("1") NÃO disparou junto.
-            self.assertNotIn("1", engine.injector.tapped)
+            # E o clique esquerdo NÃO seguiu junto (A confirma, não clica).
+            self.assertFalse(engine.injector.buttons.get("left", False))
 
     # A com a sublinha ABERTA: fecha a sublinha E a roda, sem disparar o atalho do P.
     def test_a_with_submenu_closes_wheel_without_firing(self):
@@ -603,13 +605,13 @@ class PetSubmenuTests(unittest.TestCase):
             self.assertEqual(engine.injector.tapped, [])
             self.assertIsNone(engine._pet_click_seq)
 
-    # A com a roda aberta NÃO dispara a tecla padrão do A ("1"): o toque é da confirmação.
+    # A com a roda aberta NÃO segura o clique esquerdo: o toque é da confirmação.
     def test_a_key_tap_suppressed_when_wheel_open(self):
         with tempfile.TemporaryDirectory() as directory:
             engine, _ = self._engine(directory)
             self._tick(engine, directory, self._state(("lb",), rx=0.0, ry=-0.6))
             self._tick(engine, directory, self._state(("lb", "a"), rx=0.0, ry=-0.6))
-            self.assertNotIn("1", engine.injector.tapped)
+            self.assertFalse(engine.injector.buttons.get("left", False))
 
     # Após confirmar com o A (roda fechada via latch, LB ainda segurado), o stick NÃO
     # ressuscita a seleção; soltar o LB e apertar de novo reabre a roda do zero.
@@ -1063,3 +1065,312 @@ class FaceButtonsMouseTests(unittest.TestCase):
             engine, _, injector = self._engine(directory)
             self._tick(engine, self._state(("lb", "x"), rx=-0.6, ry=0.8))
             self.assertFalse(injector.buttons.get("right", False))
+
+
+class OverworldRemapTests(unittest.TestCase):
+    # Mapa do overworld (docs/REMAP-BOTOES): Y/B/RB/RT tocam 1/2/3/4 na borda de subida;
+    # LT+botão toca 5..0; d-pad sem ação; RB/L3 não seguram mais Shift/Alt.
+    # Gatilhos: limiar TRIGGER_ACTIVE_THRESHOLD (0.50) separa "segurado" de "solto".
+    # Borda de RT/LT: histerese — o motor atualiza as bordas a cada tick (o _tick aqui
+    # imita o run: estado do tick anterior alimenta a borda do atual).
+
+    @staticmethod
+    def _state(buttons: tuple[str, ...] = (), **kw) -> ControllerState:
+        return ControllerState(connected=True, buttons=frozenset(buttons), **kw)
+
+    def _engine(self, directory: str) -> tuple[BridgeEngine, SharedOverlayState, FakeInjector]:
+        config = ConfigManager(Path(directory) / "perfil.json")
+        shared = SharedOverlayState()
+        engine = BridgeEngine(config, shared)
+        engine._mode = "direct"
+        injector = FakeInjector()
+        injector.cursor = (960, 540)  # centro da janela: zona "center"
+        engine.injector = injector
+        return engine, shared, injector
+
+    def _tick(self, engine: BridgeEngine, state: ControllerState, now: float = 0.0) -> None:
+        cfg = engine.config.get()
+        rect = Rect(0, 0, 1920, 1080)
+        engine._process_active(FakeHub(), state, rect, cfg, now, 0.05)
+        engine._previous = state
+
+    # Y na borda (painéis fechados): toca o 1.
+    def test_y_taps_1_when_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state(("y",)))
+            self.assertIn("1", engine.injector.tapped)
+
+    # B na borda (painéis fechados): toca o 2 (e não abre ESC — estado anterior fechado).
+    def test_b_taps_2_when_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state(("b",)))
+            self.assertIn("2", engine.injector.tapped)
+            self.assertNotIn("ESC", engine.injector.tapped)
+
+    # RB na borda: toca o 3 (o antigo hold SHIFT morreu no remap).
+    def test_rb_taps_3(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("rb",)))
+            self.assertIn("3", engine.injector.tapped)
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertNotIn("SHIFT", keys)
+
+    # RT cruza o limiar: toca o 4 (borda com histerese no limiar 0.5).
+    def test_rt_taps_4(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state())
+            self._tick(engine, self._state(rt=1.0))
+            self.assertIn("4", engine.injector.tapped)
+            # Segurar o RT não repete (sem auto-repeat).
+            engine.injector.tapped.clear()
+            self._tick(engine, self._state(rt=1.0))
+            self.assertNotIn("4", engine.injector.tapped)
+
+    # RB segurando não repete o 3 (borda de subida).
+    def test_rb_held_does_not_repeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state(("rb",)))
+            self._tick(engine, self._state(("rb",)))
+            self.assertEqual(engine.injector.tapped.count("3"), 1)
+
+    # LT segurado + A na borda: toca o 5 (painéis fechados) e NÃO segura o clique comum.
+    def test_lt_a_taps_5_when_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("a",), lt=1.0))
+            self.assertIn("5", engine.injector.tapped)
+            # O A com LT ativo NÃO segura o clique esquerdo comum.
+            self.assertFalse(injector.buttons.get("left", False))
+
+    # LT + X na borda: toca o 6 (e não segura o clique direito comum).
+    def test_lt_x_taps_6(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("x",), lt=1.0))
+            self.assertIn("6", engine.injector.tapped)
+            self.assertFalse(injector.buttons.get("right", False))
+
+    # LT + Y na borda: toca o 7 (mesmo com painel aberto — LT+ tem prioridade sobre o
+    # remap contextual de Y=Shift+clique).
+    def test_lt_y_taps_7_with_panel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("y",), lt=1.0))
+            self.assertIn("7", engine.injector.tapped)
+            # Não injetou Shift+clique (o 7 é toque puro de tecla).
+            self.assertNotIn("SHIFT", [e[1] for e in injector.events if e[0] == "key"])
+
+    # LT + B na borda: toca o 8 SEMPRE (não a ESC do remap de B, mesmo com painel).
+    def test_lt_b_taps_8_not_esc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("b",), lt=1.0))
+            self.assertIn("8", engine.injector.tapped)
+            self.assertNotIn("ESC", injector.tapped)
+
+    # LT + RB na borda: toca o 9 (prioridade sobre o 3 do RB sozinho).
+    def test_lt_rb_taps_9(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("rb",), lt=1.0))
+            self.assertIn("9", engine.injector.tapped)
+            self.assertNotIn("3", engine.injector.tapped)
+
+    # LT + RT na borda: toca o 0 (prioridade sobre o 4 do RT sozinho).
+    def test_lt_rt_taps_0(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(lt=1.0, rt=1.0))
+            self.assertIn("0", engine.injector.tapped)
+            self.assertNotIn("4", engine.injector.tapped)
+
+    # RT abaixo do limiar (0.3 < 0.5) não conta como segurado: não dispara o 4.
+    def test_rt_below_threshold_no_tap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            self._tick(engine, self._state())
+            self._tick(engine, self._state(rt=0.3))
+            self.assertNotIn("4", engine.injector.tapped)
+
+    # A/B/X/Y sem LT tocam o clique comum / tecla comum (não o combo).
+    def test_no_lt_no_combo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("a",)))
+            self.assertTrue(injector.buttons.get("left", False))
+            self.assertEqual(engine.injector.tapped, [])
+
+    # ---------- Remap contextual (painel aberto no tick anterior) ----------
+
+    # B com painel direito aberto no tick anterior: abre ESC e reseta o rastreador.
+    def test_b_with_panel_open_sends_esc_and_resets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            self._tick(engine, self._state(("b",)))
+            self.assertIn("ESC", injector.tapped)
+            self.assertNotIn("2", injector.tapped)
+            self.assertEqual(engine._active_panels, ["", ""])
+            self.assertEqual(shared.get().active_panels, ["", ""])
+
+    # B com o MESMO tick da abertura da roda: NÃO abre ESC (estado anterior fechado —
+    # a borda do B pertence ao overworld fechado).
+    def test_b_on_opening_tick_taps_2_not_esc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            # Painel ainda fechado no tick anterior (_previous_panels = ("", "")).
+            # Roda abre o painel neste tick (simulando o A confirmando o slot).
+            engine._active_panels = ["", "I"]  # o handler da roda já abriu
+            self._tick(engine, self._state(("b",)))
+            # B tocou o 2 (estado anterior estava fechado) — não ESC.
+            self.assertIn("2", injector.tapped)
+            self.assertNotIn("ESC", injector.tapped)
+
+    # Y com painel aberto no tick anterior + cursor na região do ABERTO (direito):
+    # injeta Shift+clique E o rastreador abre o outro painel (esquerdo "P").
+    def test_y_shift_click_opens_other_panel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            # Painel direito aberto; cursor na região DIREITA (painel aberto).
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            # Região direita em 1920x1080: painel direito começa em rect.right - w.
+            # w = panel_width = 1080 * (7/15 + 20/1080) ≈ 504.24 + 20 ≈ 524.24 → direita x>1395.76.
+            injector.cursor = (1500, 540)
+            self._tick(engine, self._state(("y",)))
+            # Shift+clique foi injetado (Shift down+up, left down+up).
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertIn("SHIFT", keys)
+            mice = [e for e in injector.events if e[0] == "mouse"]
+            self.assertIn(("mouse", "left", True), mice)
+            self.assertIn(("mouse", "left", False), mice)
+            # O rastreador abriu o painel esquerdo ("P") — o jogo abriu o outro.
+            self.assertEqual(engine._active_panels, ["P", "I"])
+            self.assertEqual(shared.get().active_panels, ["P", "I"])
+
+    # Y com painel aberto + cursor na região do FECHADO (centro): injeta Shift+clique
+    # mas NÃO abre outro painel (o clique não caiu no lado do aberto).
+    def test_y_shift_click_center_no_panel_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            injector.cursor = (960, 540)  # centro: zona "center"
+            self._tick(engine, self._state(("y",)))
+            # Shift+clique saiu...
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertIn("SHIFT", keys)
+            # ...mas nenhum painel novo abriu (clique no centro, não no lado aberto).
+            self.assertEqual(engine._active_panels, ["", "I"])
+
+    # LT + A com painel aberto no tick anterior: Ctrl+clique (não o 5).
+    def test_lt_a_with_panel_sends_ctrl_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("a",), lt=1.0))
+            # Ctrl+clique: CTRL down+up, left down+up.
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertIn("CTRL", keys)
+            mice = [e for e in injector.events if e[0] == "mouse"]
+            self.assertIn(("mouse", "left", True), mice)
+            self.assertIn(("mouse", "left", False), mice)
+            # Não tocou o 5 (o combo virou o Ctrl+clique contextual).
+            self.assertNotIn("5", injector.tapped)
+
+    # D-pad continua sem ação no overworld (o mapa antigo 5-8 morreu).
+    def test_dpad_still_noop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, _ = self._engine(directory)
+            for btn in ("dpad_up", "dpad_right", "dpad_down", "dpad_left"):
+                self._tick(engine, self._state((btn,)))
+            self.assertEqual(engine.injector.tapped, [])
+
+    # RB segurado NÃO segura mais Shift (o hold SHIFT morreu no remap).
+    def test_rb_held_no_shift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("rb",)))
+            self._tick(engine, self._state(("rb",)))
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertNotIn("SHIFT", keys)
+
+    # L3 segurado NÃO segura mais Alt (o hold ALT morreu no remap).
+    def test_l3_held_no_alt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            self._tick(engine, self._state(("l3",)))
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertNotIn("ALT", keys)
+
+
+class LegacyProfileMigrationTests(unittest.TestCase):
+    # Perfil escrito ANTES do remap (tem rb_hold/l3_hold, Y="4", d-pad 5-8) migra para o
+    # novo mapa no reload: Y="1", B="2", RB="3", RT="4", LT+ combos 5..0, d-pad "".
+    # Chaves que sobrevivem (start, r3, radial_slots) preservam o valor do perfil.
+    def test_legacy_profile_migrates_to_new_map(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "perfil.json"
+            legacy = {
+                "bindings": {
+                    "a": "",
+                    "b": "2",
+                    "x": "",
+                    "y": "4",
+                    "dpad_up": "5",
+                    "dpad_right": "6",
+                    "dpad_down": "7",
+                    "dpad_left": "8",
+                    "r3": "TAB",
+                    "start": "F9",  # customizado: PRECISA sobreviver à migração
+                    "rb_hold": "SHIFT",
+                    "l3_hold": "ALT",
+                    "radial_slots": ["I", "S", "Q", "J", "P", "C", "A"],
+                }
+            }
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            config = ConfigManager(path)
+            bindings = config.get()["bindings"]
+            self.assertEqual(bindings["y"], "1")
+            self.assertEqual(bindings["b"], "2")
+            self.assertEqual(bindings["rb"], "3")
+            self.assertEqual(bindings["rt"], "4")
+            self.assertEqual(bindings["lt_a"], "5")
+            self.assertEqual(bindings["lt_rt"], "0")
+            self.assertEqual(bindings["dpad_up"], "")
+            self.assertEqual(bindings["dpad_down"], "")
+            self.assertNotIn("rb_hold", bindings)
+            self.assertNotIn("l3_hold", bindings)
+            # Customização sobrevivente preservada.
+            self.assertEqual(bindings["start"], "F9")
+            self.assertEqual(bindings["r3"], "TAB")
+
+    # Perfil novo (sem chaves antigas) NÃO é considerado legado: um "y": "4"
+    # customizado a posteriori não é pisado.
+    def test_new_profile_custom_y_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "perfil.json"
+            path.write_text(json.dumps({"bindings": {"y": "4"}}), encoding="utf-8")
+            config = ConfigManager(path)
+            self.assertEqual(config.get()["bindings"]["y"], "4")

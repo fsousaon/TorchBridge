@@ -132,6 +132,8 @@ VK_NAMES = {
     "ESCAPE": 0x1B,
     "TAB": 0x09,
     "SHIFT": 0x10,
+    "CTRL": 0x11,
+    "CONTROL": 0x11,
     "ALT": 0x12,
     "SPACE": 0x20,
     "ENTER": 0x0D,

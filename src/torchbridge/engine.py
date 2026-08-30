@@ -87,6 +87,23 @@ class BridgeEngine(threading.Thread):
         self._pet_submenu_selection: int = PET_SUBMENU_DEFAULT
         # Painéis laterais abertos pela roda: índice 0 = esquerdo (C/P), 1 = direito (I/S/Q/J); "" = fechado.
         self._active_panels: list[str] = ["", ""]
+        # Painéis no tick ativo anterior: o remap contextual de B/Y só vale com o
+        # estado ESTÁVEL — abrir/fechar o painel no mesmo tick (roda/ESC) não conta
+        # como "aberto" para a borda do B (senão o B abriria a ESC em vez do 2).
+        self._previous_panels: tuple[str, str] = ("", "")
+        # Gatilhos no tick anterior (histerese em TRIGGER_ACTIVE_THRESHOLD): bordas de
+        # RT (toque 4) e do combo LT+RT (toque 0). ATUALIZADAS A CADA TICK EM run() —
+        # também com o jogo sem foco — para um gatilho segurado através de uma perda
+        # de foco não vazar um toque falso ao retomar.
+        self._previous_lt_active = False
+        self._previous_rt_active = False
+        # Estado corrente/bordas calculado em _update_trigger_edges (todo tick).
+        self._lt_current = False
+        self._lt_edge_up = False
+        self._rt_edge_up = False
+        # O Shift+clique (Y com painel aberto) injeta o clique direto no meio do tick e
+        # consome a parte de cursor/botões segurados: ela só roda no tick seguinte.
+        self._skip_pointer_frame = False
         # Sequência de clique do pet em andamento: (x, y do alvo, retorno_x, retorno_y,
         # letra do painel esquerdo pendente, t de início). Enquanto existe, o cursor é
         # exclusivo da sequência — o stick não move o mouse — e o clique esquerdo
@@ -190,6 +207,8 @@ class BridgeEngine(threading.Thread):
         self._pet_submenu_selection = PET_SUBMENU_DEFAULT
         # O latch de confirmação pelo A também não pode sobreviver à interrupção.
         self._radial_dismissed = False
+        # Pausa/interrupção também não pode deixar o tick do Shift+clique 'pendurado'.
+        self._skip_pointer_frame = False
         self.shared.update(
             radial_active=False,
             radial_selection=None,
@@ -285,36 +304,185 @@ class BridgeEngine(threading.Thread):
             self._center_combo_started = None
             self._center_combo_triggered = False
 
-    # Botões de ação (face B/Y, direcional, R3): toque único na borda de subida.
-    # A e X SAÍRAM desta lista: são os cliques de mouse (esquerdo/direito) e não
-    # têm mais tecla associada. Com a roda de atalhos ABERTA (LB segurado) o d-pad
-    # inteiro fica sobrecarregado: ele controla a sublinha de pet actions (up/down)
-    # e NÃO dispara mais os toques de tecla configurados (o usuário está na roda,
-    # não no jogo).
+    # Botões discretos do overworld (mapa docs/REMAP-BOTOES): R3 continua tocando seu
+    # binding (TAB). O d-pad NÃO dispara no overworld (vazio por padrão; a tela inicial
+    # usará, mas o rastreamento dela ainda não existe). B/Y e os gatilhos têm tratamento
+    # próprio — ver _handle_overworld_remap e _handle_trigger_combos. Com a roda ABERTA
+    # (LB segurado) a supressão inteira vale: nenhum toque de tecla pode vazar.
     def _handle_discrete_bindings(
         self,
         state: ControllerState,
         bindings: dict[str, Any],
     ) -> None:
-        # Roda aberta: o d-pad é da sublinha de pet e nenhum toque de tecla dispara
-        # enquanto a roda estiver de pé. (O latch _radial_dismissed fecha a roda com o
-        # LB ainda segurado após o A.)
-        radial_open = state.pressed("lb") and not self._radial_dismissed
-        for button in (
-            "b",
-            "y",
-            "dpad_up",
-            "dpad_right",
-            "dpad_down",
-            "dpad_left",
-            "r3",
-        ):
-            # Com a roda aberta: d-pad inteiro é da sublinha.
-            if radial_open and button.startswith("dpad_"):
-                continue
-            # Borda de subida: um toque por pressionamento, sem auto-repeat.
-            if state.pressed(button) and not self._previous.pressed(button):
-                self._tap_binding(bindings.get(button))
+        # Roda aberta: a roda é o mundo — nenhum toque de tecla dispara enquanto ela
+        # estiver de pé (o d-pad controla a sublinha de pet actions lá dentro).
+        if state.pressed("lb") and not self._radial_dismissed:
+            return
+        # R3: borda de subida, um toque por pressionamento, sem auto-repeat.
+        if state.pressed("r3") and not self._previous.pressed("r3"):
+            self._tap_binding(bindings.get("r3"))
+
+    # Limiar (0..1) que o gatilho precisa passar para contar como "segurado" (RT=4,
+    # LT+RT=0, e LT como modificador dos combos). O SDL normaliza gatilhos analógicos
+    # para 0..1; o mesmo limiar vale no caminho raw (trigger_value devolve 0..1).
+    TRIGGER_ACTIVE_THRESHOLD = 0.50
+
+    # Sincroniza as bordas dos gatilhos com o estado do tick (chamado no COMEÇO do
+    # _process_active e na ramada inativa do run — os flags precisam acompanhar o
+    # hardware mesmo quando nada é enviado, para um gatilho segurado através de uma
+    # perda de foco não vazar um toque falso ao retomar o foco).
+    def _update_trigger_edges(self, state: ControllerState) -> None:
+        self._lt_current = state.lt >= self.TRIGGER_ACTIVE_THRESHOLD
+        self._lt_edge_up = self._lt_current and not self._previous_lt_active
+        self._rt_edge_up = state.rt >= self.TRIGGER_ACTIVE_THRESHOLD and not self._previous_rt_active
+        self._previous_lt_active = self._lt_current
+        self._previous_rt_active = state.rt >= self.TRIGGER_ACTIVE_THRESHOLD
+
+    # Clique modificado injetado no lugar (Shift/Ctrl + clique esquerdo): mesma ordem de
+    # um clique físico modificado — mod down → left down → left up → mod up, tudo no
+    # mesmo tick (o gap entre down/up ≈ 0; o jogo lê o par como um clique único). O
+    # clique NÃO entra em _held_mouse de propósito: a borda de subida do left no tick
+    # seguinte dispararia a lógica de click_zone de fechamento de painéis. O cursor não
+    # se mexe aqui — o jogador apontou antes com o stick.
+    def _modifier_click(self, modifier: str) -> None:
+        if self.injector.key(modifier, True):
+            self._held_keys.add(modifier)
+        # Botão esquerdo JÁ retido (click-to-move em curso): injetar o clique soltaria
+        # o clique retido antes da hora (o left up mataria o movimento) — o clique já
+        # "aconteceu" na descida do A; o modificador vem e vai sem tocar no botão.
+        if "left" not in self._held_mouse:
+            self.injector.mouse_button("left", True)
+            self.injector.mouse_button("left", False)
+        if self._held_keys.discard(modifier):
+            self.injector.key(modifier, False)
+
+    # Combos de gatilho do overworld (docs/REMAP-BOTOES), disparados na BORDA de
+    # subida do BOTÃO — o gatilho é o modificador, o botão é o gesto:
+    #   RB sozinho       → toque 3      RT sozinho  → toque 4
+    #   LT + A/X/Y/B     → toques 5/6/7/8
+    #   LT + RB          → toque 9      LT + RT     → toque 0
+    # O "LT ativo" é o LT corrente do tick (limiar em TRIGGER_ACTIVE_THRESHOLD):
+    # segurar LT e DEPOIS apertar o botão dispara o combo; apertar o botão e DEPOIS
+    # o LT não (a borda do botão já foi consumida como ação comum). Com a roda ABERTA
+    # nada dispara aqui — a roda é o mundo (A confirma slot, os demais estão
+    # suprimidos, mesma regra da supressão clássica do d-pad/face).
+    def _handle_trigger_combos(
+        self,
+        state: ControllerState,
+        bindings: dict[str, Any],
+    ) -> None:
+        # Roda aberta: o A pertence à confirmação de slot; nada de combo pode vazar.
+        if state.pressed("lb") and not self._radial_dismissed:
+            return
+        # Sequência do pet em curso: o cursor/click é exclusivo dela — nenhum combo
+        # pode vazar no meio do clique (o A do jogador pertence à confirmação).
+        if self._pet_click_seq is not None:
+            return
+        lt_now = self._lt_current
+        # RB: borda de subida → 9 com LT ativo (prioridade), senão 3 (sempre toque —
+        # o antigo hold SHIFT morreu no remap).
+        if state.pressed("rb") and not self._previous.pressed("rb"):
+            self._tap_binding(bindings.get("lt_rb", "9") if lt_now else bindings.get("rb", "3"))
+        # RT: borda de subida (histerese no limiar) → 0 com LT ativo, senão 4.
+        if self._rt_edge_up:
+            self._tap_binding(bindings.get("lt_rt", "0") if lt_now else bindings.get("rt", "4"))
+        # A com LT: borda de subida → Ctrl+clique (painel aberto) ou toque 5 (fechado).
+        # O A com LT segurado NUNCA segura o clique esquerdo comum: o _process_active
+        # desliga o left_pressed enquanto LT está ativo (o combo tem prioridade).
+        if state.pressed("a") and not self._previous.pressed("a") and lt_now:
+            stable = self._previous_panels
+            if bool(stable[0]) or bool(stable[1]):
+                self._modifier_click("CTRL")
+                # O clique injetado consome a parte de cursor/botões deste tick.
+                self._skip_pointer_frame = True
+            else:
+                self._tap_binding(bindings.get("lt_a", "5"))
+        # X com LT: borda de subida → 6 (o X com LT nunca segura o clique direito comum).
+        if state.pressed("x") and not self._previous.pressed("x") and lt_now:
+            self._tap_binding(bindings.get("lt_x", "6"))
+        # Y com LT: borda de subida → 7 SEMPRE (o remap contextual de Y=Shift+clique
+        # confere o LT antes — o LT+ tem prioridade sobre o remap, igual ao LT+B=8).
+        if state.pressed("y") and not self._previous.pressed("y") and lt_now:
+            self._tap_binding(bindings.get("lt_y", "7"))
+        # B com LT: borda de subida → 8 SEMPRE (o LT+ tem prioridade sobre o remap
+        # contextual de B=ESC — o _handle_overworld_remap confere o LT antes).
+        if state.pressed("b") and not self._previous.pressed("b") and lt_now:
+            self._tap_binding(bindings.get("lt_b", "8"))
+
+    # Remap contextual do overworld (docs/REMAP-BOTOES): com ao menos um painel lateral
+    # ABERTO no estado do tick ANTERIOR (estável — ver _previous_panels), B e Y trocam
+    # de função:
+    #   B  = ESC: fecha todos os painéis do jogo e reseta o rastreador (mesma
+    #      semântica do Start). Sem painel no tick anterior: B toca o 2 clássico.
+    #   Y  = Shift + clique esquerdo injetado no lugar do cursor (o jogador apontou
+    #      antes com o stick). Sem painel no tick anterior: Y toca o 1 clássico.
+    #   O Y no LADO DA TELA COM O PAINEL ABERTO faz o jogo abrir o OUTRO painel
+    #      automaticamente (comportamento do jogo — ver a OBS do doc): o rastreador
+    #      acompanha de forma otimista (zona "left" + esquerda aberta → abre o
+    #      direito "I"; zona "right" + direita aberta → abre o esquerdo "P";
+    #      aba de fechar → fecha só aquele lado).
+    # Por que o estado do tick ANTERIOR: abrir o painel pela roda e apertar B no MESMO
+    # tick não abre a ESC (a borda do B pertence ao overworld fechado); e no tick de
+    # transição pós-ESC (estado já zerado) o B volta a ser o 2. Sem painel aberto no
+    # tick anterior e sem borda de B/Y: nada acontece aqui.
+    def _handle_overworld_remap(
+        self,
+        state: ControllerState,
+        rect: Rect,
+        bindings: dict[str, Any],
+    ) -> None:
+        # Roda aberta: a roda é o mundo — B/Y suprimidos (regra clássica).
+        if state.pressed("lb") and not self._radial_dismissed:
+            return
+        # Sequência do pet em curso: o cursor/click é exclusivo dela — o Shift+clique
+        # do Y não pode mexer no cursor no meio do clique do pet, nem a ESC do B
+        # pode fechar os menus no meio da sequência.
+        if self._pet_click_seq is not None:
+            return
+        lt_now = self._lt_current
+        stable = self._previous_panels
+        panels_open = bool(stable[0]) or bool(stable[1])
+        # B: LT+B (8) já foi consumido pelos combos — não reprocessar aqui (senão
+        # sairia ESC E 8 no mesmo tick). Sem LT: com painel aberto no tick anterior,
+        # B = ESC + reset; senão B toca o 2.
+        if state.pressed("b") and not self._previous.pressed("b") and not lt_now:
+            if panels_open:
+                # ESC direto no injetor (não _tap_binding): o jogo fechou os menus,
+                # o rastreador acompanha. O clique esquerdo retido do click-to-move
+                # segue intacto — a parte de cursor roda depois no mesmo tick.
+                self.injector.tap("ESC")
+                self._reset_active_panels()
+            else:
+                self._tap_binding(bindings.get("b"))
+        # Y: LT+Y (7) já foi consumido pelos combos. Sem LT: com painel aberto no tick
+        # anterior, Y = Shift + clique esquerdo; senão Y toca o 1.
+        if state.pressed("y") and not self._previous.pressed("y") and not lt_now:
+            if panels_open:
+                self._modifier_click("SHIFT")
+                # O jogo abre o OUTRO painel quando o Y é pressionado no lado da
+                # tela com o painel ABERTO (comportamento do doc, OBS): o rastreador
+                # acompanha de forma otimista. Clique no lado do ABERTO com o outro
+                # fechado → abre o outro; clique na aba de fechar → fecha só aquele.
+                x, y = self.injector.cursor_position()
+                zone = click_zone(rect, x, y, self._hud_mask)
+                left, right = self._active_panels
+                if zone == "left" and left and not right:
+                    self._active_panels[1] = "I"
+                elif zone == "right" and right and not left:
+                    self._active_panels[0] = "P"
+                elif zone == "close_left" and left:
+                    self._active_panels[0] = ""
+                elif zone == "close_right" and right:
+                    self._active_panels[1] = ""
+                if [left, right] != self._active_panels:
+                    self.shared.update(active_panels=list(self._active_panels))
+                # O clique injetado consome a parte de cursor/botões deste tick: o
+                # _process_active pula _move_pointer/_set_mouse agora — senão o
+                # cursor saltaria no meio do clique e a borda de subida do left
+                # dispararia o click_zone de fechamento com o cursor na região do painel.
+                self._skip_pointer_frame = True
+            else:
+                self._tap_binding(bindings.get("y"))
 
     # Sequência de clique das ações do pet (confirmada pelo A com a sublinha aberta).
     # Não há tecla de teclado para essas ações: o cursor é levado ATÉ O BOTÃO na
@@ -667,6 +835,9 @@ class BridgeEngine(threading.Thread):
         now: float,
         dt: float,
     ) -> None:
+        # BORDAS DOS GATILHOS PRIMEIRO: os handlers de combo/remap leem _lt_current e
+        # _rt_edge_up calculados aqui contra o estado do tick.
+        self._update_trigger_edges(state)
         bindings = cfg["bindings"]
         self._handle_center_buttons(state, rect, bindings, now)
         self._handle_discrete_bindings(state, bindings)
@@ -674,11 +845,11 @@ class BridgeEngine(threading.Thread):
         # _handle_pet_click abaixo já faz o movimento até o botão na hora.
         self._handle_radial(hub, state, bindings, rect, now)
         self._handle_pet_click(now)
-
-        center_combo = state.pressed("back") and state.pressed("start")
-        # RB segura Shift (atacar sem avançar) e L3 segura Alt (ver itens); nunca durante o combo de calibração.
-        self._set_key(bindings.get("rb_hold", "SHIFT"), state.pressed("rb") and not center_combo)
-        self._set_key(bindings.get("l3_hold", "ALT"), state.pressed("l3") and not center_combo)
+        # Remap do overworld e combos de gatilho (mapa docs/REMAP-BOTOES): B/Y
+        # contextuais (ESC / Shift+clique) e RB/RT/LT+ (3/4/5..0). Rodam depois da
+        # roda: com LB de pé eles se auto-suprimem lá dentro.
+        self._handle_trigger_combos(state, bindings)
+        self._handle_overworld_remap(state, rect, bindings)
 
         # Posiciona o cursor; retorna True quando o movimento direto deve segurar o clique esquerdo.
         # Com a sequência do pet em curso os sticks estão bloqueados: nenhum move, nenhum
@@ -690,6 +861,15 @@ class BridgeEngine(threading.Thread):
             # estado 'left' fica exatamente como estava antes da sequência, então
             # nem a borda de descida (soltar por engano) nem a borda de subida
             # (click_zone fechando painéis) disparam no meio do hover/clique.
+            self._previous_panels = (self._active_panels[0], self._active_panels[1])
+            return
+        # Clique modificado injetado neste tick (Shift+clique do Y / Ctrl+clique do
+        # LT+A com painel aberto): a parte de cursor/botões fica para o tick
+        # seguinte — o cursor não salta no meio do clique e a borda de subida do
+        # left não dispara o click_zone com o cursor ainda na região do painel.
+        if self._skip_pointer_frame:
+            self._skip_pointer_frame = False
+            self._previous_panels = (self._active_panels[0], self._active_panels[1])
             return
         auto_move = self._move_pointer(state, rect, cfg, dt)
         # Cliques de mouse vêm dos botões face: A = esquerdo, X = direito.
@@ -701,10 +881,14 @@ class BridgeEngine(threading.Thread):
         # mouse no jogo — inclusive depois da confirmação, quando o usuário
         # ainda segura A/LB no fim da sequência do pet (sem isso o clique
         # esquerdo grudaria e o herói seguiria o cursor).
+        # Com LT ativo os dois ficam inertes TAMBÉM: A/X pertencem aos combos
+        # LT+A (5 / Ctrl+clique) e LT+X (6) — segurar o LT com o A não pode
+        # segurar o clique comum.
         radial_held = state.pressed("lb")
-        left_pressed = auto_move or (state.pressed("a") and not radial_held)
+        lt_held = self._lt_current
+        left_pressed = auto_move or (state.pressed("a") and not radial_held and not lt_held)
         self._set_mouse("left", left_pressed)
-        self._set_mouse("right", state.pressed("x") and not radial_held)
+        self._set_mouse("right", state.pressed("x") and not radial_held and not lt_held)
         # Borda de subida do clique esquerdo: sincroniza com o fechamento de menus do jogo
         # (mesma regra do ESC/Alt+F4). Botão do painel = fecha só aquele lado; zona central
         # com os dois abertos = fechou tudo.
@@ -727,6 +911,9 @@ class BridgeEngine(threading.Thread):
             elif zone == "center" and both_panels_open(self._active_panels):
                 self._reset_active_panels()
         self._previous_left_pressed = left_pressed
+        # Snapshot do estado de painéis para o tick seguinte: o remap contextual de
+        # B/Y decide com o estado ESTÁVEL do tick anterior (ver docstring do handler).
+        self._previous_panels = (self._active_panels[0], self._active_panels[1])
 
     # Loop principal da thread: lê controle → confere foco → age → espera o restante do período.
     def run(self) -> None:
@@ -798,7 +985,11 @@ class BridgeEngine(threading.Thread):
                 if enabled and game_active and state.connected:
                     self._process_active(hub, state, rect, cfg, now, dt)
                 # Qualquer interrupção (pausa, jogo em segundo plano, sem controle): libera tudo.
+                # As bordas dos gatilhos continuam acompanhando o hardware NOS TICKS
+                # INATIVOS (dentro de _process_active no tick ativo): um gatilho
+                # segurado através de uma perda de foco não vaza toque falso ao retomar.
                 else:
+                    self._update_trigger_edges(state)
                     self._release_all()
 
                 self._previous = state

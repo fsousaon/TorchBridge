@@ -52,20 +52,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_calibration": True,
     },
     # Botões → teclas do Torchlight; radial_slots são os atalhos da roda (1..N, N = tamanho da lista).
+    # Mapa do overworld (spec docs/REMAP-BOTOES): A/X = cliques de mouse; Y/B/RB/RT tocam
+    # 1/2/3/4 na borda de subida; LT+botão toca 5..0. D-pad fica sem ação no overworld
+    # (a tela inicial usará, mas o rastreamento dela ainda não existe).
     "bindings": {
         # A e X são os cliques de mouse (esquerdo/direito) — sem tecla associada.
         "a": "",
         "b": "2",
         "x": "",
-        "y": "4",
-        "dpad_up": "5",
-        "dpad_right": "6",
-        "dpad_down": "7",
-        "dpad_left": "8",
+        "y": "1",
+        # D-pad: sem binding no overworld (vazio = ignorado).
+        "dpad_up": "",
+        "dpad_right": "",
+        "dpad_down": "",
+        "dpad_left": "",
         "r3": "TAB",
         "start": "ESC",
-        "rb_hold": "SHIFT",
-        "l3_hold": "ALT",
+        # Ombros/gatilhos: toques na borda de subida (RB=3, RT=4).
+        "rb": "3",
+        "rt": "4",
+        # Combos LT (L2/ZL) + botão = 5..0.
+        "lt_a": "5",
+        "lt_x": "6",
+        "lt_y": "7",
+        "lt_b": "8",
+        "lt_rb": "9",
+        "lt_rt": "0",
         "radial_slots": ["I", "S", "Q", "J", "P", "C", "A"],
     },
     # Mapa bruto para controles sem SDL (preenchido pelo assistente de calibração, indexado por GUID).
@@ -214,6 +226,28 @@ class ConfigManager:
             data["bindings"]["radial_slots"] = deepcopy(
                 DEFAULT_CONFIG["bindings"]["radial_slots"]
             )
+        # Migração do mapa do overworld (spec docs/REMAP-BOTOES): perfis escritos antes
+        # do remap têm chaves que morreram (rb_hold/l3_hold) e valores antigos (Y="4",
+        # d-pad 5-8). O marcador é o flag _legacy_bindings posto no reload (detecção
+        # pelas chaves rb_hold/l3_hold — presentes em todo perfil do formato antigo).
+        # Sobrescreve os HERDADOS que contradizem o novo mapa, mas preserva qualquer
+        # binding customizado nas chaves que sobrevivem (start, r3, radial_slots e
+        # os cliques de mouse).
+        if data.pop("_legacy_bindings", None):
+            data["bindings"]["b"] = "2"
+            data["bindings"]["y"] = "1"
+            data["bindings"]["rb"] = "3"
+            data["bindings"]["rt"] = "4"
+            for combo_key, default in (
+                ("lt_a", "5"), ("lt_x", "6"), ("lt_y", "7"),
+                ("lt_b", "8"), ("lt_rb", "9"), ("lt_rt", "0"),
+            ):
+                data["bindings"][combo_key] = default
+        data["bindings"].pop("rb_hold", None)
+        data["bindings"].pop("l3_hold", None)
+        # D-pad: nunca mais dispara no overworld — vira "" mesmo em perfil antigo.
+        for dpad_key in ("dpad_up", "dpad_right", "dpad_down", "dpad_left"):
+            data["bindings"][dpad_key] = ""
         return data
 
     # Recarrega o arquivo quando o mtime muda (ou force). Qualquer erro mantém a última config válida.
@@ -228,6 +262,14 @@ class ConfigManager:
             # Raiz precisa ser objeto JSON (dict).
             if not isinstance(incoming, dict):
                 raise ValueError("A raiz do perfil precisa ser um objeto JSON.")
+            # Perfil escrito ANTES do remap do overworld? Marca para o _validate migrar
+            # os defaults antigos (Y="4", d-pad 5-8) para o novo mapa. O marcador são
+            # as chaves que SÓ o formato antigo tinha (rb_hold/l3_hold) — presentes em
+            # todo perfil gerado pelo código antigo — assim um "y": "4" customizado a
+            # posteriori nunca é pisado. Perfis novos não têm essas chaves → não migram.
+            old_b = incoming.get("bindings")
+            if isinstance(old_b, dict) and ("rb_hold" in old_b or "l3_hold" in old_b):
+                incoming["_legacy_bindings"] = True
             merged = self._validate(_deep_merge(DEFAULT_CONFIG, incoming))
         except (OSError, TypeError, KeyError, ValueError, json.JSONDecodeError):
             return False
