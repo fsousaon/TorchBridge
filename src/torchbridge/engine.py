@@ -101,9 +101,15 @@ class BridgeEngine(threading.Thread):
         self._lt_current = False
         self._lt_edge_up = False
         self._rt_edge_up = False
-        # O Shift+clique (Y com painel aberto) injeta o clique direto no meio do tick e
-        # consome a parte de cursor/botões segurados: ela só roda no tick seguinte.
-        self._skip_pointer_frame = False
+        # Clique modificado em curso (Shift/Ctrl + left, remap contextual de Y / LT+A):
+        # (modificador, t de início). Os ticks intermediários seguram o modificador
+        # FÍSICAMENTE (e o left, se a sequência baixou) — o jogo amostra a tecla por
+        # frame, então o clique precisa nascer com o modificador ainda pressionado;
+        # soltar no mesmo tick fazia o jogo lê-lo como clique simples (bug, ago/2026).
+        self._modifier_seq: tuple[str, float] | None = None
+        # Flags de fase da sequência: a sequência baixou o left? já soltou?
+        self._modifier_left_down = False
+        self._modifier_left_up = False
         # Sequência de clique do pet em andamento: (x, y do alvo, retorno_x, retorno_y,
         # letra do painel esquerdo pendente, t de início). Enquanto existe, o cursor é
         # exclusivo da sequência — o stick não move o mouse — e o clique esquerdo
@@ -207,8 +213,14 @@ class BridgeEngine(threading.Thread):
         self._pet_submenu_selection = PET_SUBMENU_DEFAULT
         # O latch de confirmação pelo A também não pode sobreviver à interrupção.
         self._radial_dismissed = False
-        # Pausa/interrupção também não pode deixar o tick do Shift+clique 'pendurado'.
-        self._skip_pointer_frame = False
+        # Clique modificado em curso: solta o left da sequência (ele NÃO está em
+        # _held_mouse) — o modificador já foi solto pelo laço de _held_keys acima.
+        # A sequência não sobrevive à pausa (o que deteve o foco detém as entradas).
+        if self._modifier_seq is not None:
+            if self._modifier_left_down and not self._modifier_left_up:
+                self.injector.mouse_button("left", False)
+                self._modifier_left_up = True
+            self._modifier_seq = None
         self.shared.update(
             radial_active=False,
             radial_selection=None,
@@ -338,22 +350,94 @@ class BridgeEngine(threading.Thread):
         self._previous_lt_active = self._lt_current
         self._previous_rt_active = state.rt >= self.TRIGGER_ACTIVE_THRESHOLD
 
-    # Clique modificado injetado no lugar (Shift/Ctrl + clique esquerdo): mesma ordem de
-    # um clique físico modificado — mod down → left down → left up → mod up, tudo no
-    # mesmo tick (o gap entre down/up ≈ 0; o jogo lê o par como um clique único). O
-    # clique NÃO entra em _held_mouse de propósito: a borda de subida do left no tick
-    # seguinte dispararia a lógica de click_zone de fechamento de painéis. O cursor não
-    # se mexe aqui — o jogador apontou antes com o stick.
-    def _modifier_click(self, modifier: str) -> None:
-        if self.injector.key(modifier, True):
-            self._held_keys.add(modifier)
+    # Janela (s) em que o modificador fica fisicamente pressionado antes do left up
+    # (o jogo amostra a tecla por frame — o clique precisa NASCER com o modificador
+    # no chão, como um humano segurando Shift) e até o modificador up.
+    _MODIFIER_CLICK_HOLD = 0.12
+    _MODIFIER_RELEASE_HOLD = 0.18
+    # Limite (s) e intervalo (s) do retry que reenvia o KEYUP do modificador até o
+    # estado físico confirmar a liberação.
+    _MODIFIER_RELEASE_TIMEOUT = 0.05
+    _MODIFIER_RELEASE_RETRY_INTERVAL = 0.005
+
+    # Clique modificado do remap contextual (Y = Shift+clique / LT+A = Ctrl+clique):
+    # ARMA a sequência. O modificador é pressionado e o left baixado (se livre) agora;
+    # o left up sai em _MODIFIER_CLICK_HOLD e o modificador up em _MODIFIER_RELEASE_HOLD
+    # (cronometrado por _handle_modifier_release, rodando a cada tick em _process_active).
+    #
+    # Por que segurar e não injetar o par down/up no mesmo tick (a forma antiga): o
+    # Torchlight amostra o estado FÍSICO da tecla a cada frame; com down/up do modificador
+    # no mesmo tick o jogo já lêia o Shift solto no momento do clique — e o comando
+    # saía como clique simples, sem o Shift (bug real, ago/2026). O segurar também mata
+    # o bug gêmeo (KEYUP perdido → Shift preso contaminando o clique da cruz seguinte):
+    # a liberação no fim passa por _ensure_modifier_released, que confere o estado
+    # físico (GetAsyncKeyState) e reenvia o up até confirmar.
+    #
+    # O left da sequência NÃO entra em _held_mouse: a borda de subida dispararia a
+    # lógica de click_zone de fechamento de painéis no tick seguinte. O cursor não se
+    # mexe aqui — o jogador apontou antes com o stick (os ticks em curso suprimem a
+    # parte de cursor/botões no _process_active, mesma regra da sequência do pet).
+    def _start_modifier_click(self, modifier: str, now: float) -> None:
+        # Borda de subida: se o modificador já está retido por outro caminho, não o
+        # tocamos (não soltamos o hold alheio) — a sequência só solta o que baixou.
+        self._modifier_seq = (modifier, now)
+        self._modifier_left_down = False
+        self._modifier_left_up = False
+        if modifier not in self._held_keys:
+            # Defensivo: limpa entrada fantasma (registrado sem o down ter saído).
+            self._held_keys.discard(modifier)
+            if self.injector.key(modifier, True):
+                self._held_keys.add(modifier)
         # Botão esquerdo JÁ retido (click-to-move em curso): injetar o clique soltaria
         # o clique retido antes da hora (o left up mataria o movimento) — o clique já
-        # "aconteceu" na descida do A; o modificador vem e vai sem tocar no botão.
+        # "aconteceu" na descida do A; a sequência só acompanha a liberação do
+        # modificador, sem tocar no botão.
         if "left" not in self._held_mouse:
-            self.injector.mouse_button("left", True)
-            self.injector.mouse_button("left", False)
-        if self._held_keys.discard(modifier):
+            if self.injector.mouse_button("left", True):
+                self._modifier_left_down = True
+
+    # Cronômetro da sequência (chamado a cada tick em _process_active): segura o
+    # modificador fisicamente durante os frames do clique e fecha o par na hora certa:
+    #   t ≥ _MODIFIER_CLICK_HOLD    → left up (se a sequência baixou)
+    #   t ≥ _MODIFIER_RELEASE_HOLD  → modificador up GARANTIDO pelo estado físico
+    # Durante a sequência o _process_active pula a parte de cursor/botões (mesma regra
+    # da sequência do pet): o cursor não salta e a borda de subida do left não dispara
+    # a click_zone no meio do clique.
+    def _handle_modifier_release(self, now: float) -> None:
+        seq = self._modifier_seq
+        if seq is None:
+            return
+        modifier, t0 = seq
+        t = now - t0
+        if t < 0:
+            return
+        if not self._modifier_left_up and t >= self._MODIFIER_CLICK_HOLD:
+            if self._modifier_left_down:
+                self.injector.mouse_button("left", False)
+            self._modifier_left_up = True
+        if t >= self._MODIFIER_RELEASE_HOLD:
+            self._modifier_seq = None
+            self._modifier_left_down = False
+            # O modificador só foi baixado por esta sequência se segue retido — caso
+            # contrário (retido por outro caminho) não o tocamos.
+            if modifier in self._held_keys:
+                self._held_keys.discard(modifier)
+                self._ensure_modifier_released(modifier)
+
+    # KEYUP + verificação do estado físico: reenvia a solta do modificador até a tecla
+    # confirmar solta (GetAsyncKeyState) — um evento perdido deixa o modificador preso
+    # e o próximo clique do jogador sairia modificado sem querer.
+    def _ensure_modifier_released(self, modifier: str) -> None:
+        deadline = time.monotonic() + self._MODIFIER_RELEASE_TIMEOUT
+        self.injector.key(modifier, False)
+        while self.injector.key_pressed(modifier):
+            if time.monotonic() >= deadline:
+                log.warning(
+                    "Liberação física de %s não confirmada; o modificador pode continuar preso",
+                    modifier,
+                )
+                break
+            time.sleep(self._MODIFIER_RELEASE_RETRY_INTERVAL)
             self.injector.key(modifier, False)
 
     # Combos de gatilho do overworld (docs/REMAP-BOTOES), disparados na BORDA de
@@ -370,6 +454,7 @@ class BridgeEngine(threading.Thread):
         self,
         state: ControllerState,
         bindings: dict[str, Any],
+        now: float,
     ) -> None:
         # Roda aberta: o A pertence à confirmação de slot; nada de combo pode vazar.
         if state.pressed("lb") and not self._radial_dismissed:
@@ -377,6 +462,10 @@ class BridgeEngine(threading.Thread):
         # Sequência do pet em curso: o cursor/click é exclusivo dela — nenhum combo
         # pode vazar no meio do clique (o A do jogador pertence à confirmação).
         if self._pet_click_seq is not None:
+            return
+        # Clique modificado em curso: o left está com a sequência — nenhum outro
+        # combo pode vazar (LT+A viraria um segundo Ctrl+clique no meio do clique).
+        if self._modifier_seq is not None:
             return
         lt_now = self._lt_current
         # RB: borda de subida → 9 com LT ativo (prioridade), senão 3 (sempre toque —
@@ -392,9 +481,10 @@ class BridgeEngine(threading.Thread):
         if state.pressed("a") and not self._previous.pressed("a") and lt_now:
             stable = self._previous_panels
             if bool(stable[0]) or bool(stable[1]):
-                self._modifier_click("CTRL")
-                # O clique injetado consome a parte de cursor/botões deste tick.
-                self._skip_pointer_frame = True
+                # Ctrl+clique: arma a sequência — o left up (120 ms) e o Ctrl up
+                # (180 ms) saem nos ticks seguintes via _handle_modifier_release;
+                # os ticks em curso ficam sob o gate do _process_active.
+                self._start_modifier_click("CTRL", now)
             else:
                 self._tap_binding(bindings.get("lt_a", "5"))
         # X com LT: borda de subida → 6 (o X com LT nunca segura o clique direito comum).
@@ -430,6 +520,7 @@ class BridgeEngine(threading.Thread):
         state: ControllerState,
         rect: Rect,
         bindings: dict[str, Any],
+        now: float,
     ) -> None:
         # Roda aberta: a roda é o mundo — B/Y suprimidos (regra clássica).
         if state.pressed("lb") and not self._radial_dismissed:
@@ -438,6 +529,10 @@ class BridgeEngine(threading.Thread):
         # do Y não pode mexer no cursor no meio do clique do pet, nem a ESC do B
         # pode fechar os menus no meio da sequência.
         if self._pet_click_seq is not None:
+            return
+        # Clique modificado em curso: o left está com a sequência — o Y não arma um
+        # segundo Shift+clique no meio do clique em andamento.
+        if self._modifier_seq is not None:
             return
         lt_now = self._lt_current
         stable = self._previous_panels
@@ -458,7 +553,13 @@ class BridgeEngine(threading.Thread):
         # anterior, Y = Shift + clique esquerdo; senão Y toca o 1.
         if state.pressed("y") and not self._previous.pressed("y") and not lt_now:
             if panels_open:
-                self._modifier_click("SHIFT")
+                # Shift+clique: arma a sequência — o left up (120 ms) e o Shift up
+                # (180 ms, garantido pelo estado físico) saem nos ticks seguintes via
+                # _handle_modifier_release; os ticks em curso ficam sob o gate do
+                # _process_active. O Shift fica FÍSICAMENTE pressionado nos frames do
+                # clique: o jogo amostra a tecla por frame (a forma antiga, down/up no
+                # mesmo tick, saía como clique simples — bug real, ago/2026).
+                self._start_modifier_click("SHIFT", now)
                 # O jogo abre o OUTRO painel quando o Y é pressionado no lado da
                 # tela com o painel ABERTO (comportamento do doc, OBS): o rastreador
                 # acompanha de forma otimista. Clique no lado do ABERTO com o outro
@@ -476,11 +577,6 @@ class BridgeEngine(threading.Thread):
                     self._active_panels[1] = ""
                 if [left, right] != self._active_panels:
                     self.shared.update(active_panels=list(self._active_panels))
-                # O clique injetado consome a parte de cursor/botões deste tick: o
-                # _process_active pula _move_pointer/_set_mouse agora — senão o
-                # cursor saltaria no meio do clique e a borda de subida do left
-                # dispararia o click_zone de fechamento com o cursor na região do painel.
-                self._skip_pointer_frame = True
             else:
                 self._tap_binding(bindings.get("y"))
 
@@ -841,15 +937,18 @@ class BridgeEngine(threading.Thread):
         bindings = cfg["bindings"]
         self._handle_center_buttons(state, rect, bindings, now)
         self._handle_discrete_bindings(state, bindings)
-        # A roda antes da sequência: o A arma a sequência neste mesmo tick e o
+        # A roda antes das sequências: o A arma a do pet neste mesmo tick e o
         # _handle_pet_click abaixo já faz o movimento até o botão na hora.
         self._handle_radial(hub, state, bindings, rect, now)
         self._handle_pet_click(now)
         # Remap do overworld e combos de gatilho (mapa docs/REMAP-BOTOES): B/Y
         # contextuais (ESC / Shift+clique) e RB/RT/LT+ (3/4/5..0). Rodam depois da
-        # roda: com LB de pé eles se auto-suprimem lá dentro.
-        self._handle_trigger_combos(state, bindings)
-        self._handle_overworld_remap(state, rect, bindings)
+        # roda: com LB de pé eles se auto-suprimem lá dentro. O cronômetro do clique
+        # modificado roda DEPOIS: um Y/LT+A do próprio tick arma a sequência e o
+        # _handle_modifier_release já executa as fases já vencidas (determinístico).
+        self._handle_trigger_combos(state, bindings, now)
+        self._handle_overworld_remap(state, rect, bindings, now)
+        self._handle_modifier_release(now)
 
         # Posiciona o cursor; retorna True quando o movimento direto deve segurar o clique esquerdo.
         # Com a sequência do pet em curso os sticks estão bloqueados: nenhum move, nenhum
@@ -863,12 +962,11 @@ class BridgeEngine(threading.Thread):
             # (click_zone fechando painéis) disparam no meio do hover/clique.
             self._previous_panels = (self._active_panels[0], self._active_panels[1])
             return
-        # Clique modificado injetado neste tick (Shift+clique do Y / Ctrl+clique do
-        # LT+A com painel aberto): a parte de cursor/botões fica para o tick
-        # seguinte — o cursor não salta no meio do clique e a borda de subida do
-        # left não dispara o click_zone com o cursor ainda na região do painel.
-        if self._skip_pointer_frame:
-            self._skip_pointer_frame = False
+        # Clique modificado em curso (Shift+clique do Y / Ctrl+clique do LT+A): os
+        # ticks intermediários pulam cursor/botões — o left da sequência vive fora de
+        # _held_mouse (a borda de subida dispararia a click_zone de fechamento de
+        # painéis no meio do clique) e o cursor não salta nos frames do clique.
+        if self._modifier_seq is not None:
             self._previous_panels = (self._active_panels[0], self._active_panels[1])
             return
         auto_move = self._move_pointer(state, rect, cfg, dt)

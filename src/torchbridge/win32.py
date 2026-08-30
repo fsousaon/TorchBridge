@@ -94,6 +94,8 @@ if IS_WINDOWS:
     user32.GetClientRect.restype = wintypes.BOOL
     user32.ClientToScreen.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
     user32.ClientToScreen.restype = wintypes.BOOL
+    user32.GetAsyncKeyState.argtypes = (wintypes.WORD,)
+    user32.GetAsyncKeyState.restype = ctypes.c_short
     user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
     user32.GetCursorPos.restype = wintypes.BOOL
     user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
@@ -327,6 +329,13 @@ class InputInjector:
         flags = self.KEYEVENTF_SCANCODE | (0 if down else self.KEYEVENTF_KEYUP)
         item = INPUT(type=self.INPUT_KEYBOARD, ki=KEYBDINPUT(0, scan, flags, 0, 0))
         return self._send(item)
+
+    # Estado FÍSICO real da tecla (GetAsyncKeyState, bit alto = pressionada) — a mesma
+    # leitura que o jogo faz, então é a referência de verdade: um KEYUP perdido na fila
+    # de input aparece aqui como "ainda pressionada" mesmo após o SendInput de solta.
+    def key_pressed(self, name: str) -> bool:
+        vk = key_code(name)
+        return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
     # Toque: pressiona e solta na sequência.
     def tap(self, name: str) -> bool:

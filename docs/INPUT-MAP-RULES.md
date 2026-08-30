@@ -124,3 +124,16 @@ abrir o outro painel automaticamente. O engine apenas **acompanha** esse estado
 **Nota técnica:** o remap contextual usa o estado do tick **anterior**. Abrir um
 painel pela roda e apertar B no **mesmo** tick toca o 2, não a ESC — o "aberto"
 só conta quando estável por um tick.
+
+**Nota técnica (clique modificado sequenciado, ago/2026):** o Shift/Ctrl do clique
+modificado fica fisicamente pressionado durante os frames do clique — o Torchlight
+amostra o estado da tecla por frame, então com down/up no mesmo tick o jogo já
+lêia o modificador solto no momento do clique e o comando saía como clique
+simples (bug real). Cronograma: mod down + left down no tick do botão, left up em
+120 ms, mod up em 180 ms. A liberação final é confirmada pelo estado físico
+(`GetAsyncKeyState`): se o KEYUP se perder, o engine reenvia a solta em loop curto
+(5 ms, máx. 50 ms) até a tecla confirmar solta — sem isso o modificador ficava
+"preso" e o clique simples seguinte (cruz = mover item no inventário) saía
+modificado (e o jogo jogava o item na mochila do pet). Durante os ~180 ms da
+sequência o cursor e os botões do jogo ficam suprimidos (mesma regra da
+sequência do pet).

@@ -14,12 +14,19 @@ class FakeInjector:
     # Substituto do InputInjector: grava os eventos em vez de enviá-los ao Windows.
     # `events` registra a ORDEM cronológica de tudo (move, mouse, tap) — as asserts
     # de sequência (clique do pet: ida → down → up → retorno) usam essa lista.
+    # O estado físico das teclas (`buttons`) modela GetAsyncKeyState: um KEYUP
+    # "perdido" (drop_next_key_up) sai do SendInput mas NUNCA aplica a solta —
+    # é a simulação do bug real do Shift residual (ago/2026).
     def __init__(self) -> None:
         self.moved: list[tuple[int, int]] = []
         self.cursor = (100, 100)
         self.buttons: dict[str, bool] = {}
         self.tapped: list[str] = []
         self.events: list[tuple] = []
+        # Teclas cujo PRÓXIMO KEYUP é engolido (o OS não aplica a solta).
+        self.drop_next_key_up: set[str] = set()
+        # Teclas fisicamente presas (o OS engole TODO KEYUP — driver quebrado).
+        self.stuck_keys: set[str] = set()
 
     def move(self, x: int, y: int) -> bool:
         self.moved.append((x, y))
@@ -30,9 +37,20 @@ class FakeInjector:
         return self.cursor
 
     def key(self, name: str, down: bool) -> bool:
+        if not down and name in self.drop_next_key_up:
+            # KEYUP perdido: o SendInput "aceitou" mas a solta nunca chegou.
+            self.drop_next_key_up.discard(name)
+            self.events.append(("key_dropped", name,))
+            return True
         self.buttons[name] = down
         self.events.append(("key", name, down))
         return True
+
+    # Estado físico da tecla (equivalente do GetAsyncKeyState no engine).
+    def key_pressed(self, name: str) -> bool:
+        if name in self.stuck_keys:
+            return True
+        return self.buttons.get(name, False)
 
     def mouse_button(self, button: str, down: bool) -> bool:
         self.buttons[button] = down
@@ -1255,8 +1273,10 @@ class OverworldRemapTests(unittest.TestCase):
             # Região direita em 1920x1080: painel direito começa em rect.right - w.
             # w = panel_width = 1080 * (7/15 + 20/1080) ≈ 504.24 + 20 ≈ 524.24 → direita x>1395.76.
             injector.cursor = (1500, 540)
-            self._tick(engine, self._state(("y",)))
-            # Shift+clique foi injetado (Shift down+up, left down+up).
+            self._tick(engine, self._state(("y",)), now=0.0)
+            # Shift+clique foi armado (Shift pressionado + left down) e fecha na
+            # liberação (200 ms): o jogo viu o par Shift+clique e abriu o outro.
+            self._tick(engine, self._state(), now=0.20)
             keys = [e[1] for e in injector.events if e[0] == "key"]
             self.assertIn("SHIFT", keys)
             mice = [e for e in injector.events if e[0] == "mouse"]
@@ -1298,6 +1318,192 @@ class OverworldRemapTests(unittest.TestCase):
             self.assertIn(("mouse", "left", False), mice)
             # Não tocou o 5 (o combo virou o Ctrl+clique contextual).
             self.assertNotIn("5", injector.tapped)
+
+    # Y com painel aberto: Shift+clique SEQUENCIADO — o modificador fica FÍSICAMENTE
+    # pressionado nos frames do clique (o jogo amostra a tecla por frame; a forma
+    # antiga, down/up no mesmo tick, saía como clique simples — bug real, ago/2026):
+    # SHIFT down + left down no tick do Y, left up em 120 ms, SHIFT up (garantido)
+    # em 180 ms.
+    def test_y_shift_click_hold_sequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            injector.cursor = (1500, 540)  # região direita: jogo abre o outro painel
+            self._tick(engine, self._state(("y",)), now=0.0)
+            # Tick do Y: Shift e left baixados (o cursor NÃO se moveu — o jogador
+            # apontou antes).
+            self.assertEqual(injector.events[0], ("key", "SHIFT", True))
+            self.assertEqual(injector.events[1], ("mouse", "left", True))
+            self.assertTrue(injector.key_pressed("SHIFT"))
+            self.assertEqual(injector.moved, [])
+            self.assertIsNotNone(engine._modifier_seq)
+            # Tick intermediário (50 ms): o jogo está lendo Shift PRESSIONADO com o
+            # left ainda segurado — é isso que o torna Shift+clique.
+            self._tick(engine, self._state(), now=0.05)
+            self.assertTrue(injector.key_pressed("SHIFT"))
+            self.assertTrue(injector.buttons.get("left"))
+            self.assertIsNotNone(engine._modifier_seq)  # ainda em curso (50 ms < 180 ms)
+            self.assertEqual(injector.moved, [])  # cursor/botões suprimidos no gate
+            # Tick de 150 ms: left up (120 ms) já saiu, mas o Shift AINDA está
+            # pressionado (soltou em 180 ms) — a janela humana do clique modificado.
+            self._tick(engine, self._state(), now=0.15)
+            self.assertFalse(injector.buttons.get("left"))
+            self.assertTrue(injector.key_pressed("SHIFT"))
+            # Tick de liberação (200 ms): SHIFT up garantido pelo estado físico.
+            self._tick(engine, self._state(), now=0.20)
+            self.assertFalse(injector.key_pressed("SHIFT"))
+            self.assertIsNone(engine._modifier_seq)
+            self.assertNotIn("SHIFT", engine._held_keys)
+            # A borda de subida do left (fora de _held_mouse) NÃO disparou a
+            # click_zone de fechamento: o painel segue aberto.
+            self.assertEqual(engine._active_panels, ["P", "I"])
+            # Ordem cronológica completa: SHIFT down → left down → left up → SHIFT up.
+            kinds = [
+                (e[0], e[1], e[2]) for e in injector.events if e[0] in ("key", "mouse")
+            ]
+            self.assertEqual(kinds, [
+                ("key", "SHIFT", True),
+                ("mouse", "left", True),
+                ("mouse", "left", False),
+                ("key", "SHIFT", False),
+            ])
+
+    # O mesmo risco do KEYUP perdido agora vive na FASE DE SOLTA da sequência:
+    # o engine reenvia a solta até a tecla confirmar solta (GetAsyncKeyState).
+    def test_y_shift_click_release_retries_when_keyup_dropped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            self._tick(engine, self._state(("y",)), now=0.0)
+            # A solta de 180 ms (tick a 0.20) some na fila de input (solta não aplicada).
+            injector.drop_next_key_up = {"SHIFT"}
+            self._tick(engine, self._state(), now=0.20)
+            self.assertIn(("key_dropped", "SHIFT"), injector.events)
+            # O retry reenviou o KEYUP dentro do próprio tick: Shift fisicamente solto.
+            self.assertFalse(injector.key_pressed("SHIFT"))
+            self.assertNotIn("SHIFT", engine._held_keys)
+            # Ordem mantida: o retry veio DEPOIS do left up.
+            events = injector.events
+            lup = next(i for i, e in enumerate(events) if e == ("mouse", "left", False))
+            retry = next(i for i, e in enumerate(events) if e == ("key", "SHIFT", False))
+            self.assertGreater(retry, lup)
+
+    # LT + A com painel aberto no tick anterior: Ctrl+clique (não o 5).
+    def test_lt_a_with_panel_sends_ctrl_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, _, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            self._tick(engine, self._state(lt=1.0))
+            self._tick(engine, self._state(("a",), lt=1.0), now=0.0)
+            # Ctrl+clique: CTRL down, left down (sequência armada)...
+            keys = [e[1] for e in injector.events if e[0] == "key"]
+            self.assertIn("CTRL", keys)
+            mice = [e for e in injector.events if e[0] == "mouse"]
+            self.assertIn(("mouse", "left", True), mice)
+            self.assertNotIn("5", injector.tapped)
+            # ...e o par fecha nos ticks seguintes: left up (150 ms, já passou dos
+            # 120 ms) + CTRL up garantido (200 ms, já passou dos 180 ms).
+            self._tick(engine, self._state(), now=0.15)
+            self.assertIn(("mouse", "left", False), [
+                e for e in injector.events if e[0] == "mouse"
+            ])
+            self.assertTrue(injector.key_pressed("CTRL"))  # ainda segurando (150 < 180)
+            self._tick(engine, self._state(), now=0.20)
+            self.assertFalse(injector.key_pressed("CTRL"))
+            self.assertFalse(injector.buttons.get("CTRL"))
+            self.assertNotIn("CTRL", engine._held_keys)
+
+    # Tecla fisicamente presa (driver/OS engole TODO KEYUP): o retry estoura o
+    # timeout na liberação (180 ms) e desiste logando — não trava o tick.
+    def test_modifier_click_stuck_key_gives_up_after_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            injector.stuck_keys = {"SHIFT"}
+            engine._MODIFIER_RELEASE_TIMEOUT = 0.01  # encurta o loop do teste
+            engine._MODIFIER_RELEASE_RETRY_INTERVAL = 0.001
+            self._tick(engine, self._state(("y",)), now=0.0)
+            self._tick(engine, self._state(), now=0.20)  # liberação (180 ms) vencida
+            # O clique saiu (down + up de left) e o engine desistiu sem segurar a
+            # tecla no registro interno.
+            mice = [e for e in injector.events if e[0] == "mouse"]
+            self.assertIn(("mouse", "left", True), mice)
+            self.assertIn(("mouse", "left", False), mice)
+            self.assertNotIn("SHIFT", engine._held_keys)
+            self.assertIsNone(engine._modifier_seq)
+
+    # Left JÁ retido (click-to-move em curso): a sequência não toca no botão (o
+    # left up mataria o movimento) — mas a liberação do modificador continua
+    # garantida pelo estado físico.
+    def test_y_shift_click_with_held_left_skips_mouse_but_guarantees_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            # Click-to-move em curso: o left está retido desde antes do Y.
+            engine.injector.mouse_button("left", True)
+            engine._held_mouse.add("left")
+            self._tick(engine, self._state(("y",)), now=0.0)
+            # Nenhum down/up de left da sequência (só o retido de antes)...
+            mice = [e for e in injector.events if e[0] == "mouse"]
+            self.assertEqual(mice, [("mouse", "left", True)])
+            # ...o Shift acompanhou o down e será solto garantido na liberação (200 ms).
+            self.assertTrue(injector.key_pressed("SHIFT"))
+            # O click-to-move continua: stick ativo mantém o left retido via auto_move
+            # (sem isso o _set_mouse soltaria o retido na descida do A do tick seguinte).
+            self._tick(engine, self._state(lx=0.8), now=0.20)
+            self.assertFalse(injector.key_pressed("SHIFT"))
+            self.assertNotIn("SHIFT", engine._held_keys)
+            # O left retido seguiu retido (a sequência não o tocou) e volta a ser
+            # do click-to-move: soltando o stick, o _set_mouse devolve a descida.
+            self.assertTrue(injector.buttons.get("left"))
+            self.assertIn("left", engine._held_mouse)
+            self._tick(engine, self._state(), now=0.25)
+            self.assertFalse(injector.buttons.get("left"))
+            self.assertNotIn("left", engine._held_mouse)
+
+    # Durante a sequência o _process_active pula cursor/botões: stick direito
+    # inclinado nos ticks intermediários não move o cursor (o clique não salta
+    # no meio) e nenhum toque de tecla vaza do remap (Y de novo = um só par).
+    def test_modifier_sequence_suppresses_pointer_and_retrigger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            self._tick(engine, self._state(("y",)), now=0.0)
+            # Tick intermediário com stick direito inclinado (cursor livre): o
+            # cursor fica parado e o Y segurado não rearma a sequência.
+            self._tick(engine, self._state(("y",), rx=0.8, ry=0.0), now=0.05)
+            self.assertEqual(injector.moved, [])
+            downs = [e for e in injector.events if e == ("key", "SHIFT", True)]
+            self.assertEqual(len(downs), 1)
+            self._tick(engine, self._state(), now=0.20)  # liberação (180 ms) vencida
+            self.assertIsNone(engine._modifier_seq)
+
+    # Pausa/foco perdido no MEIO da sequência: o left da sequência é solto na hora
+    # (ele vive fora de _held_mouse) e a sequência morre junto com a interrupção.
+    def test_release_all_cancels_inflight_modifier_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, shared, injector = self._engine(directory)
+            engine._active_panels = ["", "I"]
+            engine._previous_panels = ("", "I")
+            shared.update(active_panels=["", "I"])
+            self._tick(engine, self._state(("y",)), now=0.0)
+            self.assertTrue(injector.buttons.get("left"))
+            engine._release_all()
+            self.assertIsNone(engine._modifier_seq)
+            self.assertFalse(injector.buttons.get("left"))
+            self.assertFalse(injector.key_pressed("SHIFT"))
+            self.assertNotIn("SHIFT", engine._held_keys)
 
     # D-pad continua sem ação no overworld (o mapa antigo 5-8 morreu).
     def test_dpad_still_noop(self):
